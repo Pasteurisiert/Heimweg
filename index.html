@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker (Puffer-Radius)</title>
+  <title>City Walk Return Tracker (Sticky Header)</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -37,14 +37,17 @@
       overflow: hidden;
     }
 
+    /* Sticky Dashboard Header */
     #dashboard {
+      position: sticky;
+      top: 0;
       background-color: var(--card-bg);
       padding: 10px 14px;
       display: flex;
       flex-direction: column;
       gap: 8px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-      z-index: 1000;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+      z-index: 2000;
     }
 
     .controls-row {
@@ -55,18 +58,27 @@
       flex-wrap: wrap;
     }
 
+    .inputs-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .input-group {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 5px;
     }
 
     label {
       font-size: 0.8rem;
       color: var(--text-sub);
+      font-weight: 500;
     }
 
-    input[type="time"] {
+    input[type="time"],
+    input[type="number"] {
       background: #374151;
       border: 1px solid #4b5563;
       color: #fff;
@@ -74,6 +86,11 @@
       border-radius: 6px;
       font-size: 0.9rem;
       outline: none;
+    }
+
+    input[type="number"] {
+      width: 58px;
+      text-align: center;
     }
 
     .btn-group {
@@ -99,6 +116,7 @@
     .btn-primary { background-color: var(--accent-blue); }
     .btn-orange { background-color: var(--accent-orange); }
 
+    /* Anzeige-Panel */
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -140,6 +158,7 @@
       padding-top: 2px;
     }
 
+    /* Karte */
     #map {
       flex: 1;
       width: 100%;
@@ -165,9 +184,16 @@
 
   <div id="dashboard">
     <div class="controls-row">
-      <div class="input-group">
-        <label for="targetTime">Soll:</label>
-        <input type="time" id="targetTime" />
+      <div class="inputs-container">
+        <div class="input-group">
+          <label for="targetTime">Soll:</label>
+          <input type="time" id="targetTime" />
+        </div>
+        <div class="input-group">
+          <label for="reserveTime">Reserve:</label>
+          <input type="number" id="reserveTime" value="30" min="0" max="180" step="5" />
+          <span style="font-size: 0.75rem; color: var(--text-sub);">Min</span>
+        </div>
       </div>
       <div class="btn-group">
         <button id="addWaypointBtn" class="btn-orange">📍 Punkt merken</button>
@@ -188,7 +214,7 @@
 
     <div class="info-bar">
       <span id="distDisplay">Rückweg: -- km</span>
-      <span id="radiusDisplay">30m-Puffer-Radius: -- m</span>
+      <span id="radiusDisplay">Puffer-Radius: -- m</span>
       <span id="waypointCountDisplay">Markierungen: 0</span>
     </div>
   </div>
@@ -202,7 +228,7 @@
     const WALKING_SPEED_KMH = 4.5;
     const DETOUR_FACTOR = 1.30;
     const GPS_POLL_INTERVAL_MS = 60 * 1000;
-    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10;
 
     let map = null;
     let startMarker = null;
@@ -222,6 +248,9 @@
     const waypointMarkers = [];
 
     const targetInput = document.getElementById("targetTime");
+    const reserveInput = document.getElementById("reserveTime");
+
+    // Standard-Rückkehrzeit (Jetzt + 2 Stunden)
     const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
     targetInput.value = defaultTarget.toTimeString().substring(0, 5);
 
@@ -232,7 +261,6 @@
         attribution: "© OpenStreetMap"
       }).addTo(map);
 
-      // 30-Minuten-Pufferzone um den Startpunkt
       bufferCircle = L.circle([lat, lng], {
         radius: 0,
         color: '#ef4444',
@@ -335,15 +363,16 @@
 
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
 
-      // --- Dynamischer Radius für 30 Minuten Puffer ---
-      // Verfügbare Gesamtzeit bis Zielzeit minus 30 Min Puffer
-      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - 30;
+      // Reservezeit aus Input auslesen (Standard: 30 Min)
+      const reserveMinutes = parseFloat(reserveInput.value) || 0;
+
+      // Pufferkreis-Radius anhand der gewählten Reserve berechnen
+      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes;
       let maxRadiusMeters = 0;
 
       if (totalAvailableMinutes > 0) {
         const allowedWalkHours = totalAvailableMinutes / 60;
         const allowedWalkKm = allowedWalkHours * WALKING_SPEED_KMH;
-        // Luftlinienradius bereinigt um Stadt-Wegenetzfaktor
         maxRadiusMeters = (allowedWalkKm / DETOUR_FACTOR) * 1000;
       }
 
@@ -359,12 +388,13 @@
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
       bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
       distDisplay.textContent = `Rückweg: ${walkKm.toFixed(2)} km`;
-      radiusDisplay.textContent = maxRadiusMeters > 0 ? `Max. Radius: ${(maxRadiusMeters / 1000).toFixed(2)} km` : `Max. Radius: 0 m`;
+      radiusDisplay.textContent = maxRadiusMeters > 0 ? `Reserve-Radius: ${(maxRadiusMeters / 1000).toFixed(2)} km` : `Reserve-Radius: 0 m`;
 
+      // Farbcodierung bezogen auf die konfigurierte Reservezeit
       let colorClass = "color-green";
-      if (bufferMinutes < 30) {
+      if (bufferMinutes < reserveMinutes) {
         colorClass = "color-red";
-      } else if (bufferMinutes <= 45) {
+      } else if (bufferMinutes <= reserveMinutes + 15) {
         colorClass = "color-yellow";
       }
 
@@ -481,6 +511,7 @@
     });
 
     targetInput.addEventListener("change", updateCalculations);
+    reserveInput.addEventListener("input", updateCalculations);
 
     requestLocation();
     setInterval(requestLocation, GPS_POLL_INTERVAL_MS);
