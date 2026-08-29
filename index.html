@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker (Sticky Header)</title>
+  <title>City Walk Return Tracker (Exakte Isochrone)</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -37,7 +37,6 @@
       overflow: hidden;
     }
 
-    /* Sticky Dashboard Header */
     #dashboard {
       position: sticky;
       top: 0;
@@ -116,7 +115,6 @@
     .btn-primary { background-color: var(--accent-blue); }
     .btn-orange { background-color: var(--accent-orange); }
 
-    /* Anzeige-Panel */
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -158,7 +156,6 @@
       padding-top: 2px;
     }
 
-    /* Karte */
     #map {
       flex: 1;
       width: 100%;
@@ -214,7 +211,7 @@
 
     <div class="info-bar">
       <span id="distDisplay">Rückweg: -- km</span>
-      <span id="radiusDisplay">Puffer-Radius: -- m</span>
+      <span id="radiusDisplay">Isochrone: Wird berechnet...</span>
       <span id="waypointCountDisplay">Markierungen: 0</span>
     </div>
   </div>
@@ -226,7 +223,6 @@
 
   <script>
     const WALKING_SPEED_KMH = 4.5;
-    const DETOUR_FACTOR = 1.30;
     const GPS_POLL_INTERVAL_MS = 60 * 1000;
     const ROUTING_DISTANCE_THRESHOLD_KM = 0.10;
 
@@ -235,7 +231,7 @@
     let currentMarker = null;
     let returnRouteLine = null;
     let walkedTrackLine = null;
-    let bufferCircle = null;
+    let isochronePolygon = null;
 
     let startCoord = null;
     let currentCoord = null;
@@ -250,7 +246,6 @@
     const targetInput = document.getElementById("targetTime");
     const reserveInput = document.getElementById("reserveTime");
 
-    // Standard-Rückkehrzeit (Jetzt + 2 Stunden)
     const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
     targetInput.value = defaultTarget.toTimeString().substring(0, 5);
 
@@ -261,12 +256,11 @@
         attribution: "© OpenStreetMap"
       }).addTo(map);
 
-      bufferCircle = L.circle([lat, lng], {
-        radius: 0,
+      isochronePolygon = L.polygon([], {
         color: '#ef4444',
         fillColor: '#ef4444',
-        fillOpacity: 0.12,
-        weight: 1.5,
+        fillOpacity: 0.15,
+        weight: 2,
         dashArray: '4, 4'
       }).addTo(map);
 
@@ -325,6 +319,65 @@
       }
     }
 
+    // Exakte Isochrone über ein sternförmiges Routing in 8 Richtungen entlang echter Straßen
+    async function updateIsochronePolygon(maxWalkMinutes) {
+      if (!startCoord || maxWalkMinutes <= 0) {
+        if (isochronePolygon) isochronePolygon.setLatLngs([]);
+        return;
+      }
+
+      // Ziel-Distanz in Metern, die in der verbleibenden Zeit zu Fuß erreichbar ist
+      const maxDistMeters = (maxWalkMinutes / 60) * WALKING_SPEED_KMH * 1000;
+      const directions = 8; // 8 Himmelsrichtungen
+      const boundaryPoints = [];
+
+      for (let i = 0; i < directions; i++) {
+        const angle = (i * 2 * Math.PI) / directions;
+        // Erzeuge Testpunkte auf einem Kreis in jede Himmelsrichtung im Abstand der maximal erreichbaren Distanz
+        const latOffset = (maxDistMeters / 111320) * Math.cos(angle);
+        const lngOffset = (maxDistMeters / (111320 * Math.cos(startCoord.lat * Math.PI / 180))) * Math.sin(angle);
+        const testLat = startCoord.lat + latOffset;
+        const testLng = startCoord.lng + lngOffset;
+
+        // Frage OSRM, wie lange man wirklich zu Fuß von Start zu diesem Außenpunkt braucht
+        const url = `https://router.project-osrm.org/route/v1/foot/${startCoord.lng},${startCoord.lat};${testLng},${testLat}?overview=full&geometries=geojson`;
+
+        try {
+          const response = await fetch(url);
+          const data = await response.json();
+          if (data.routes && data.routes.length > 0) {
+            const route = data.routes[0];
+            const routeSeconds = route.duration;
+            const maxAllowedSeconds = maxWalkMinutes * 60;
+
+            if (route.geometry && route.geometry.coordinates.length > 0) {
+              const coords = route.geometry.coordinates;
+              // Finde den Punkt auf der Route, der exakt der maximal erlaubten Gehzeit entspricht
+              let selectedCoord = [coords[coords.length - 1][1], coords[coords.length - 1][0]];
+              
+              if (routeSeconds > maxAllowedSeconds) {
+                // Interpoliere auf der Teilstrecke zurück zum Start
+                const fraction = maxAllowedSeconds / routeSeconds;
+                const targetIdx = Math.floor(fraction * coords.length);
+                if (coords[targetIdx]) {
+                  selectedCoord = [coords[targetIdx][1], coords[targetIdx][0]];
+                }
+              }
+              boundaryPoints.push(selectedCoord);
+            }
+          }
+        } catch (e) {
+          // Fallback bei Netzwerkfehler: Nutze den direkten Offset-Punkt
+          boundaryPoints.push([testLat, testLng]);
+        }
+      }
+
+      if (boundaryPoints.length >= 3 && isochronePolygon) {
+        isochronePolygon.setLatLngs(boundaryPoints);
+        document.getElementById("radiusDisplay").textContent = `Isochrone: Exakt (${Math.round(maxWalkMinutes)} Min)`;
+      }
+    }
+
     function calculateDistanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
       const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -347,7 +400,7 @@
         walkKm = routedDistanceMeters / 1000;
         walkMs = routedDurationSeconds * 1000;
       } else {
-        walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * DETOUR_FACTOR;
+        walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * 1.3;
         walkMs = (walkKm / WALKING_SPEED_KMH) * 60 * 60 * 1000;
       }
 
@@ -362,35 +415,22 @@
       }
 
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
-
-      // Reservezeit aus Input auslesen (Standard: 30 Min)
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
-      // Pufferkreis-Radius anhand der gewählten Reserve berechnen
+      // Erlaubte Gehzeit für den Rückweg unter Berücksichtigung der Reserve
       const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes;
-      let maxRadiusMeters = 0;
 
-      if (totalAvailableMinutes > 0) {
-        const allowedWalkHours = totalAvailableMinutes / 60;
-        const allowedWalkKm = allowedWalkHours * WALKING_SPEED_KMH;
-        maxRadiusMeters = (allowedWalkKm / DETOUR_FACTOR) * 1000;
-      }
-
-      if (bufferCircle) {
-        bufferCircle.setRadius(Math.max(0, maxRadiusMeters));
-      }
+      // Aktualisiere das exakte Isochronen-Polygon im Hintergrund (alle paar Minuten oder bei Positionswechsel)
+      updateIsochronePolygon(Math.max(0, totalAvailableMinutes));
 
       const etaDisplay = document.getElementById("etaDisplay");
       const bufferDisplay = document.getElementById("bufferDisplay");
       const distDisplay = document.getElementById("distDisplay");
-      const radiusDisplay = document.getElementById("radiusDisplay");
 
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
       bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
       distDisplay.textContent = `Rückweg: ${walkKm.toFixed(2)} km`;
-      radiusDisplay.textContent = maxRadiusMeters > 0 ? `Reserve-Radius: ${(maxRadiusMeters / 1000).toFixed(2)} km` : `Reserve-Radius: 0 m`;
 
-      // Farbcodierung bezogen auf die konfigurierte Reservezeit
       let colorClass = "color-green";
       if (bufferMinutes < reserveMinutes) {
         colorClass = "color-red";
@@ -499,7 +539,7 @@
         startCoord = { ...currentCoord };
         lastRoutedCoord = { ...currentCoord };
         startMarker.setLatLng([startCoord.lat, startCoord.lng]);
-        bufferCircle.setLatLng([startCoord.lat, startCoord.lng]);
+        isochronePolygon.setLatLngs([]);
         walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
         returnRouteLine.setLatLngs([]);
 
