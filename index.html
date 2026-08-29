@@ -234,9 +234,9 @@
   <script>
     // --- Konfiguration & Optimierungsparameter ---
     const WALKING_SPEED_KMH = 3.5;
-    const DETOUR_FACTOR = 1.30;
+    const DETOUR_FACTOR = 1.50;
     const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle
-    const ISOCHRONE_RAYS = 12;                  // 12 statt 36 Strahlen (spart ~67% Netzwerk)
+    const ISOCHRONE_RAYS = 6;                  // 12 statt 36 Strahlen (spart ~67% Netzwerk)
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;    // Echtes Isochronen-Netzwerkrouting nur alle 5 Min
     const STORAGE_KEY = "city_walk_tour_state";
@@ -541,7 +541,7 @@
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
       // Halbe Pufferzeit für Isochrone
-      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) / 2 - (reserveMinutes);
+      const totalAvailableMinutes = ((targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes)/2;
       const validMins = Math.max(0, totalAvailableMinutes);
 
       // Neuberechnung über Netzwerk nur alle 5 Min oder initial, ansonsten reine CPU-Skalierung
