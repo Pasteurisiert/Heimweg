@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>City Walk Return Tracker</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <style>
+    :root {
+      --bg-color: #121826;
+      --card-bg: #1f2937;
+      --text-main: #f9fafb;
+      --text-sub: #9ca3af;
+      --status-green: #10b981;
+      --status-yellow: #f59e0b;
+      --status-red: #ef4444;
+      --accent: #3b82f6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #dashboard {
+      background-color: var(--card-bg);
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+    }
+
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .input-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 0.85rem;
+      color: var(--text-sub);
+    }
+
+    input[type="time"] {
+      background: #374151;
+      border: 1px solid #4b5563;
+      color: #fff;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      outline: none;
+    }
+
+    button {
+      background-color: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    button:active {
+      opacity: 0.8;
+    }
+
+    .status-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      background: #111827;
+      padding: 10px;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .status-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .status-label {
+      font-size: 0.75rem;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      transition: color 0.3s ease;
+    }
+
+    .color-green { color: var(--status-green); }
+    .color-yellow { color: var(--status-yellow); }
+    .color-red { color: var(--status-red); }
+
+    .info-bar {
+      font-size: 0.75rem;
+      color: var(--text-sub);
+      display: flex;
+      justify-content: space-between;
+      padding-top: 2px;
+    }
+
+    #map {
+      flex: 1;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="dashboard">
+    <div class="controls-row">
+      <div class="input-group">
+        <label for="targetTime">Soll-Rückkehr:</label>
+        <input type="time" id="targetTime" />
+      </div>
+      <button id="setStartBtn">Neuer Startpunkt</button>
+    </div>
+
+    <div class="status-panel">
+      <div class="status-item">
+        <span class="status-label">Rückkehr ab jetzt</span>
+        <span id="etaDisplay" class="status-value color-green">--:--:--</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Zeitpuffer</span>
+        <span id="bufferDisplay" class="status-value color-green">-- Min</span>
+      </div>
+    </div>
+
+    <div class="info-bar">
+      <span id="distDisplay">Distanz: -- km</span>
+      <span id="walkDurationDisplay">Gehzeit: -- Min</span>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const WALKING_SPEED_KMH = 4.5;
+
+    let map = null;
+    let startMarker = null;
+    let currentMarker = null;
+    let routePolyline = null;
+
+    let startCoord = null;
+    let currentCoord = null;
+    let lastFetchedCoord = null;
+
+    let routedDistanceMeters = 0;
+    let routedDurationSeconds = 0;
+
+    const targetInput = document.getElementById("targetTime");
+    const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    targetInput.value = defaultTarget.toTimeString().substring(0, 5);
+
+    function initMap(lat, lng) {
+      map = L.map("map", { zoomControl: false }).setView([lat, lng], 16);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap"
+      }).addTo(map);
+
+      const startIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: "<div style='background-color:#3b82f6;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);'></div>",
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      });
+
+      const currentIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: "<div style='background-color:#10b981;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);'></div>",
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+
+      startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(map).bindPopup("Startpunkt");
+      currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("Aktueller Ort");
+
+      routePolyline = L.polyline([], {
+        color: '#3b82f6',
+        weight: 5,
+        opacity: 0.8,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+    }
+
+    // Fußweg-Routing über OSRM
+    async function fetchFootRoute() {
+      if (!startCoord || !currentCoord) return;
+
+      const url = `https://router.project-osrm.org/route/v1/foot/${currentCoord.lng},${currentCoord.lat};${startCoord.lng},${startCoord.lat}?overview=full&geometries=geojson`;
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.routes && data.routes.length > 0) {
+          const route = data.routes[0];
+          routedDistanceMeters = route.distance;
+          // Eigene Gehgeschwindigkeit verwenden für konsistente Berechnung
+          routedDurationSeconds = (routedDistanceMeters / 1000 / WALKING_SPEED_KMH) * 3600;
+
+          // GeoJSON-Koordinaten sind [lon, lat], Leaflet erwartet [lat, lon]
+          const latLngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+          routePolyline.setLatLngs(latLngs);
+        }
+      } catch (err) {
+        console.warn("Routing-Dienst nicht erreichbar, Fallback auf Luftlinie:", err);
+      }
+    }
+
+    function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function updateCalculations() {
+      if (!startCoord || !currentCoord) return;
+
+      const now = new Date();
+      let walkMs = 0;
+      let walkKm = 0;
+
+      if (routedDistanceMeters > 0) {
+        walkKm = routedDistanceMeters / 1000;
+        walkMs = routedDurationSeconds * 1000;
+      } else {
+        // Fallback falls Routing noch nicht geladen ist
+        walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * 1.3;
+        walkMs = (walkKm / WALKING_SPEED_KMH) * 60 * 60 * 1000;
+      }
+
+      const expectedReturn = new Date(now.getTime() + walkMs);
+
+      const [targetHours, targetMinutes] = targetInput.value.split(":").map(Number);
+      const targetDate = new Date();
+      targetDate.setHours(targetHours, targetMinutes, 0, 0);
+
+      if (targetDate.getTime() < now.getTime() - 12 * 60 * 60 * 1000) {
+        targetDate.setDate(targetDate.getDate() + 1);
+      }
+
+      const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
+
+      const etaDisplay = document.getElementById("etaDisplay");
+      const bufferDisplay = document.getElementById("bufferDisplay");
+      const distDisplay = document.getElementById("distDisplay");
+      const walkDurationDisplay = document.getElementById("walkDurationDisplay");
+
+      etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
+      bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
+      distDisplay.textContent = `Distanz: ${walkKm.toFixed(2)} km`;
+      walkDurationDisplay.textContent = `Gehzeit: ~${Math.round(walkMs / 60000)} Min`;
+
+      let colorClass = "color-green";
+      if (bufferMinutes < 30) {
+        colorClass = "color-red";
+      } else if (bufferMinutes <= 45) {
+        colorClass = "color-yellow";
+      }
+
+      etaDisplay.className = `status-value ${colorClass}`;
+      bufferDisplay.className = `status-value ${colorClass}`;
+    }
+
+    function handlePosition(position) {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+
+      if (!startCoord) {
+        startCoord = { lat, lng };
+        currentCoord = { lat, lng };
+        initMap(lat, lng);
+        fetchFootRoute();
+      } else {
+        currentCoord = { lat, lng };
+        currentMarker.setLatLng([lat, lng]);
+
+        // Neue Route nur abfragen, wenn man sich mindestens 30 Meter bewegt hat
+        if (!lastFetchedCoord || calculateDistanceKm(lat, lng, lastFetchedCoord.lat, lastFetchedCoord.lng) > 0.03) {
+          lastFetchedCoord = { lat, lng };
+          fetchFootRoute();
+        }
+      }
+
+      updateCalculations();
+    }
+
+    function handleError(error) {
+      console.warn(`GPS-Fehler: ${error.message}`);
+    }
+
+    document.getElementById("setStartBtn").addEventListener("click", () => {
+      if (currentCoord) {
+        startCoord = { ...currentCoord };
+        startMarker.setLatLng([startCoord.lat, startCoord.lng]);
+        routePolyline.setLatLngs([]);
+        fetchFootRoute();
+        updateCalculations();
+      }
+    });
+
+    targetInput.addEventListener("change", updateCalculations);
+
+    if ("geolocation" in navigator) {
+      navigator.geolocation.watchPosition(handlePosition, handleError, {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 10000
+      });
+    }
+
+    setInterval(updateCalculations, 1000);
+  </script>
+</body>
+</html>
