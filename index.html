@@ -188,7 +188,6 @@
       background-color: #000;
     }
 
-    /* Dunkler Look für Standard OSM Kacheln */
     .leaflet-tile-pane {
       filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
     }
@@ -231,7 +230,7 @@
       </div>
       <div class="btn-group">
         <button id="startWalkBtn" class="btn-green">▶ Start</button>
-        <button id="addWaypointBtn" class="btn-orange">📍 Stopp</button>
+        <button id="addWaypointBtn" class="btn-orange">📍 Marker</button>
         <button id="stopTourBtn" class="btn-red">⏹ Stop & GPX</button>
       </div>
     </div>
@@ -253,7 +252,7 @@
       <span id="trackPointsDisplay">Track: 0 Pkt</span>
       <span id="speedDisplay">3.5 km/h</span>
       <span id="isochroneStatus">Iso: Eco</span>
-      <span id="waypointCountDisplay">Stopps: 0</span>
+      <span id="waypointCountDisplay">Marker: 0</span>
     </div>
   </div>
 
@@ -271,8 +270,8 @@
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
     const STORAGE_KEY = "city_walk_tour_state_v2";
 
-    const TRACK_TIME_THRESHOLD_MS = 15 * 1000; // 15 Sekunden
-    const TRACK_DIST_THRESHOLD_KM = 0.010;     // 10 Meter
+    const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
+    const TRACK_DIST_THRESHOLD_KM = 0.010;
 
     let map = null;
     let startMarker = null;
@@ -436,11 +435,11 @@
         const eleText = wp.ele !== null ? `<br>Höhe: ${Math.round(wp.ele)} m` : '';
         const m = L.marker([wp.lat, wp.lng], { icon: wpIcon })
           .addTo(map)
-          .bindPopup(`<b>Stopp #${wp.number}</b><br>Zeit: ${wp.time}${eleText}`);
+          .bindPopup(`<b>Marker #${wp.number}</b><br>Zeit: ${wp.time}${eleText}`);
         waypointMarkers.push(m);
       });
 
-      document.getElementById("waypointCountDisplay").textContent = `Stopps: ${waypoints.length}`;
+      document.getElementById("waypointCountDisplay").textContent = `Marker: ${waypoints.length}`;
     }
 
     function updateWalkedPathDisplay() {
@@ -467,9 +466,7 @@
           const latLngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
           if (returnRouteLine) returnRouteLine.setLatLngs(latLngs);
         }
-      } catch (err) {
-        // Leise ignorieren
-      }
+      } catch (err) {}
     }
 
     async function calculateIsochrone12Rays(maxWalkMinutes) {
@@ -653,10 +650,10 @@
       const eleText = currentAltitude !== null ? `<br>Höhe: ${Math.round(currentAltitude)} m` : '';
       const marker = L.marker([currentCoord.lat, currentCoord.lng], { icon: wpIcon })
         .addTo(map)
-        .bindPopup(`<b>Stopp #${index}</b><br>Zeit: ${localTimeStr}${eleText}`);
+        .bindPopup(`<b>Marker #${index}</b><br>Zeit: ${localTimeStr}${eleText}`);
 
       waypointMarkers.push(marker);
-      document.getElementById("waypointCountDisplay").textContent = `Stopps: ${waypoints.length}`;
+      document.getElementById("waypointCountDisplay").textContent = `Marker: ${waypoints.length}`;
       saveStateToStorage();
     }
 
@@ -749,7 +746,7 @@
       }
     }
 
-    function generateAndDownloadGPX() {
+    function createGPXString() {
       let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
       gpx += `<gpx version="1.1" creator="CityWalkTracker" xmlns="http://www.topografix.com/GPX/1/1">\n`;
       gpx += `  <metadata>\n    <name>City Walk Tour</name>\n    <time>${new Date().toISOString()}</time>\n  </metadata>\n`;
@@ -763,7 +760,7 @@
       waypoints.forEach(wp => {
         gpx += `  <wpt lat="${wp.lat}" lon="${wp.lng}">\n`;
         if (wp.ele !== null && wp.ele !== undefined) gpx += `    <ele>${wp.ele}</ele>\n`;
-        gpx += `    <name>Stopp #${wp.number}</name>\n    <time>${wp.isoTime || new Date().toISOString()}</time>\n  </wpt>\n`;
+        gpx += `    <name>Marker #${wp.number}</name>\n    <time>${wp.isoTime || new Date().toISOString()}</time>\n  </wpt>\n`;
       });
 
       gpx += `  <trk>\n    <name>Gegangener Weg</name>\n    <trkseg>\n`;
@@ -774,12 +771,36 @@
       });
       gpx += `    </trkseg>\n  </trk>\n</gpx>`;
 
-      const blob = new Blob([gpx], { type: "application/gpx+xml" });
+      return gpx;
+    }
+
+    // Speichern auf Google Drive / System-Share
+    async function saveGPXToDrive() {
+      const gpxContent = createGPXString();
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const filename = `city-walk-${dateStr}.gpx`;
+      const file = new File([gpxContent], filename, { type: "application/gpx+xml" });
+
+      // Web Share API: Öffnet auf iOS/Android direkt Google Drive oder die Speicher-Auswahl
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: filename,
+            text: "GPX Tourdaten für Google Drive"
+          });
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return; // Nutzer hat Share-Menü abgebrochen
+        }
+      }
+
+      // Fallback: Direkter Dateidownload
+      const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const dateStr = new Date().toISOString().slice(0, 10);
       a.href = url;
-      a.download = `city-walk-${dateStr}.gpx`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -788,7 +809,7 @@
 
     // --- Buttons ---
 
-    // START: Setzt sofort den Startpunkt und aktiviert das Tracking
+    // START
     document.getElementById("startWalkBtn").addEventListener("click", () => {
       if (isRecording) {
         const proceed = confirm("Es läuft bereits eine Tour. Möchtest du diese wirklich verwerfen und eine NEUE Tour am aktuellen Ort starten?");
@@ -830,10 +851,8 @@
       };
 
       if (currentCoord) {
-        // Sofort ausführen, wenn GPS-Position bereits bekannt ist
         applyStart(currentCoord.lat, currentCoord.lng, currentAltitude);
       } else {
-        // Einmalige Standortanforderung als Fallback
         navigator.geolocation.getCurrentPosition((pos) => {
           applyStart(pos.coords.latitude, pos.coords.longitude, pos.coords.altitude);
         }, (err) => {
@@ -853,24 +872,24 @@
       updateCalculations();
     });
 
-    // STOPP / WEGPUNKT MERKEN
+    // MARKER SETZEN
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
       addWaypoint();
     });
 
-    // STOPP & GPX (Garantiertes Bestätigungsfenster)
-    document.getElementById("stopTourBtn").addEventListener("click", () => {
+    // STOPP & GPX
+    document.getElementById("stopTourBtn").addEventListener("click", async () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
         alert("Es gibt keine aktive Tour oder aufgezeichnete Daten zum Speichern.");
         return;
       }
 
-      const confirmStop = window.confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei herunterladen?");
+      const confirmStop = window.confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei speichern (z. B. auf Google Drive)?");
       if (!confirmStop) {
         return;
       }
 
-      generateAndDownloadGPX();
+      await saveGPXToDrive();
       isRecording = false;
       localStorage.removeItem(STORAGE_KEY);
 
@@ -904,7 +923,6 @@
       }
     });
 
-    // Initialisierung
     const hasRestored = loadStateFromStorage();
     if (!hasRestored) {
       const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
