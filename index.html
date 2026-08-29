@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return & Waypoint Tracker</title>
+  <title>City Walk Return Tracker (Eco)</title>
 
-  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
@@ -37,7 +36,7 @@
       overflow: hidden;
     }
 
-    /* Dashboard Header */
+    /* Dashboard */
     #dashboard {
       background-color: var(--card-bg);
       padding: 10px 14px;
@@ -100,7 +99,7 @@
     .btn-primary { background-color: var(--accent-blue); }
     .btn-orange { background-color: var(--accent-orange); }
 
-    /* Display Box */
+    /* Anzeige-Panel */
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -142,13 +141,12 @@
       padding-top: 2px;
     }
 
-    /* Map */
+    /* Karte */
     #map {
       flex: 1;
       width: 100%;
     }
 
-    /* Custom Waypoint Icon Style */
     .waypoint-badge {
       background-color: var(--accent-orange);
       color: #fff;
@@ -199,11 +197,13 @@
 
   <div id="map"></div>
 
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
+    // --- Konfiguration & Parameter ---
     const WALKING_SPEED_KMH = 4.5;
+    const GPS_POLL_INTERVAL_MS = 60 * 1000; // 1 Minute Abtastung
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle für neue Routenabfrage
 
     let map = null;
     let startMarker = null;
@@ -213,12 +213,11 @@
 
     let startCoord = null;
     let currentCoord = null;
-    let lastFetchedCoord = null;
+    let lastRoutedCoord = null;
 
     let routedDistanceMeters = 0;
     let routedDurationSeconds = 0;
 
-    // Array für gespeicherte Wegpunkte
     const waypoints = [];
     const waypointMarkers = [];
 
@@ -234,7 +233,6 @@
         attribution: "© OpenStreetMap"
       }).addTo(map);
 
-      // Startpunkt-Icon (Blau)
       const startIcon = L.divIcon({
         className: '',
         html: "<div style='background-color:#3b82f6;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 5px rgba(0,0,0,0.6);'></div>",
@@ -242,7 +240,6 @@
         iconAnchor: [8, 8]
       });
 
-      // Aktueller Standort-Icon (Grün)
       const currentIcon = L.divIcon({
         className: '',
         html: "<div style='background-color:#10b981;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);'></div>",
@@ -253,7 +250,6 @@
       startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(map).bindPopup("<b>Startpunkt</b>");
       currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("<b>Aktueller Ort</b>");
 
-      // Blaue Linie für den berechneten Rückweg
       returnRouteLine = L.polyline([], {
         color: '#3b82f6',
         weight: 5,
@@ -262,7 +258,6 @@
         lineJoin: 'round'
       }).addTo(map);
 
-      // Orange gestrichelte Linie für den zurückgelegten Weg der Zwischenstopps
       walkedTrackLine = L.polyline([[lat, lng]], {
         color: '#f97316',
         weight: 3,
@@ -271,7 +266,7 @@
       }).addTo(map);
     }
 
-    // OSRM Fußweg-Routing für den Rückweg
+    // OSRM Fußweg-Routing
     async function fetchFootRoute() {
       if (!startCoord || !currentCoord) return;
 
@@ -290,7 +285,7 @@
           returnRouteLine.setLatLngs(latLngs);
         }
       } catch (err) {
-        console.warn("Routing-API nicht erreichbar, nutze Schätzung:", err);
+        console.warn("Routing-API nicht erreichbar:", err);
       }
     }
 
@@ -369,7 +364,6 @@
       };
       waypoints.push(pointData);
 
-      // Marker mit Ziffer erstellen
       const wpIcon = L.divIcon({
         className: '',
         html: `<div class="waypoint-badge">${index}</div>`,
@@ -383,7 +377,6 @@
 
       waypointMarkers.push(marker);
 
-      // Pfad des gegangenen Weges aktualisieren (Startpunkt -> Stopp 1 -> Stopp 2 ...)
       const trackCoords = [
         [startCoord.lat, startCoord.lng],
         ...waypoints.map(w => [w.lat, w.lng]),
@@ -394,6 +387,7 @@
       document.getElementById("waypointCountDisplay").textContent = `Markierungen: ${waypoints.length}`;
     }
 
+    // Minütliche GPS-Positionsverarbeitung
     function handlePosition(position) {
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
@@ -401,13 +395,13 @@
       if (!startCoord) {
         startCoord = { lat, lng };
         currentCoord = { lat, lng };
+        lastRoutedCoord = { lat, lng };
         initMap(lat, lng);
         fetchFootRoute();
       } else {
         currentCoord = { lat, lng };
         currentMarker.setLatLng([lat, lng]);
 
-        // Den aktuellen Strang der gelaufenen Linie zum aktuellen Standort fortführen
         const trackCoords = [
           [startCoord.lat, startCoord.lng],
           ...waypoints.map(w => [w.lat, w.lng]),
@@ -415,9 +409,10 @@
         ];
         walkedTrackLine.setLatLngs(trackCoords);
 
-        // Routing nur bei deutlicher Bewegung (>30m) neu anfragen
-        if (!lastFetchedCoord || calculateDistanceKm(lat, lng, lastFetchedCoord.lat, lastFetchedCoord.lng) > 0.03) {
-          lastFetchedCoord = { lat, lng };
+        // Routing-API nur abfragen bei mindestens 100 m Versatz
+        const distSinceLastRoute = calculateDistanceKm(lat, lng, lastRoutedCoord.lat, lastRoutedCoord.lng);
+        if (distSinceLastRoute >= ROUTING_DISTANCE_THRESHOLD_KM) {
+          lastRoutedCoord = { lat, lng };
           fetchFootRoute();
         }
       }
@@ -425,21 +420,35 @@
       updateCalculations();
     }
 
-    function handleError(error) {
-      console.warn(`GPS-Fehler: ${error.message}`);
+    function requestLocation() {
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(handlePosition, (err) => {
+          console.warn(`GPS-Fehler: ${err.message}`);
+        }, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 10000
+        });
+      }
     }
 
-    // Button-Events
-    document.getElementById("addWaypointBtn").addEventListener("click", addWaypoint);
+    // Buttons
+    document.getElementById("addWaypointBtn").addEventListener("click", () => {
+      // Vor dem Setzen des Punktes sofort einmal aktuelle Position abfragen
+      navigator.geolocation.getCurrentPosition((pos) => {
+        handlePosition(pos);
+        addWaypoint();
+      }, () => addWaypoint());
+    });
 
     document.getElementById("setStartBtn").addEventListener("click", () => {
       if (currentCoord) {
-        // Alten Verlauf & Marker löschen
         waypointMarkers.forEach(m => map.removeLayer(m));
         waypointMarkers.length = 0;
         waypoints.length = 0;
 
         startCoord = { ...currentCoord };
+        lastRoutedCoord = { ...currentCoord };
         startMarker.setLatLng([startCoord.lat, startCoord.lng]);
         walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
         returnRouteLine.setLatLngs([]);
@@ -453,14 +462,11 @@
 
     targetInput.addEventListener("change", updateCalculations);
 
-    if ("geolocation" in navigator) {
-      navigator.geolocation.watchPosition(handlePosition, handleError, {
-        enableHighAccuracy: true,
-        maximumAge: 5000,
-        timeout: 10000
-      });
-    }
+    // Initialer Start & minütlicher Abruf
+    requestLocation();
+    setInterval(requestLocation, GPS_POLL_INTERVAL_MS);
 
+    // Sekündliches Update für präzisen Uhren- und Puffer-Countdown
     setInterval(updateCalculations, 1000);
   </script>
 </body>
