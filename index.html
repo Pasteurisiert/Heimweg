@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Tracker & GPX Recorder (Eco-OLED)</title>
+  <title>City Walk Tracker & GPX Recorder</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
     :root {
-      --bg-color: #000000;       /* Echtes Schwarz für OLED-Stromersparnis */
+      --bg-color: #000000;
       --card-bg: #111111;
       --text-main: #f3f4f6;
       --text-sub: #9ca3af;
@@ -47,6 +47,26 @@
       gap: 6px;
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
       z-index: 2000;
+    }
+
+    .start-addr-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      background: #18181b;
+      padding: 4px 8px;
+      border-radius: 5px;
+      border: 1px solid #27272a;
+    }
+
+    .start-addr-text {
+      font-size: 0.75rem;
+      color: #93c5fd;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
     }
 
     .controls-row {
@@ -117,6 +137,7 @@
     .btn-orange { background-color: var(--accent-orange); }
     .btn-green { background-color: #059669; }
     .btn-red { background-color: #dc2626; }
+    .btn-gray { background-color: #3f3f46; }
 
     .status-panel {
       display: grid;
@@ -167,25 +188,35 @@
       background-color: #000;
     }
 
+    /* Dunkler Look für Standard OSM Kacheln ohne Key */
+    .leaflet-tile-pane {
+      filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
+    }
+
     .waypoint-badge {
       background-color: var(--accent-orange);
       color: #fff;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 700;
-      border: 1.5px solid #fff;
+      border: 2px solid #fff;
       border-radius: 50%;
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 4px rgba(0,0,0,0.8);
+      box-shadow: 0 0 5px rgba(0,0,0,0.9);
     }
   </style>
 </head>
 <body>
 
   <div id="dashboard">
+    <div class="start-addr-row">
+      <span id="startAddrDisplay" class="start-addr-text">Start: Noch nicht gesetzt</span>
+      <button id="reloadStartBtn" class="btn-gray" title="Startadresse & Routing neu laden">🔄 Start laden</button>
+    </div>
+
     <div class="controls-row">
       <div class="inputs-container">
         <div class="input-group">
@@ -201,7 +232,7 @@
       <div class="btn-group">
         <button id="startWalkBtn" class="btn-green">▶ Start</button>
         <button id="addWaypointBtn" class="btn-orange">📍 Stopp</button>
-        <button id="stopTourBtn" class="btn-red">⏹ GPX</button>
+        <button id="stopTourBtn" class="btn-red">⏹ Stop & GPX</button>
       </div>
     </div>
 
@@ -218,10 +249,10 @@
 
     <div class="info-bar">
       <span id="distDisplay">Rück: -- km</span>
-      <span id="elevationDisplay">Höhe: -- m</span>
+      <span id="elevationDisplay">H: -- (↑0m)</span>
       <span id="trackPointsDisplay">Track: 0 Pkt</span>
       <span id="speedDisplay">3.5 km/h</span>
-      <span id="isochroneStatus">Eco-Isochrone</span>
+      <span id="isochroneStatus">Iso: Eco</span>
       <span id="waypointCountDisplay">Stopps: 0</span>
     </div>
   </div>
@@ -232,14 +263,17 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    // --- Konfiguration & Optimierungsparameter ---
     const WALKING_SPEED_KMH = 3.5;
-    const DETOUR_FACTOR = 1.50;
-    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle
-    const ISOCHRONE_RAYS = 6;                  // 12 statt 36 Strahlen (spart ~67% Netzwerk)
+    const DETOUR_FACTOR = 1.30;
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.05; // Neuer Rückweg-Pfad ab 50 m
+    const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
-    const ISOCHRONE_RECALC_INTERVAL_MIN = 5;    // Echtes Isochronen-Netzwerkrouting nur alle 5 Min
-    const STORAGE_KEY = "city_walk_tour_state";
+    const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
+    const STORAGE_KEY = "city_walk_tour_state_v2";
+
+    // Kriterien für Track-Punkte: min. 15 Sekunden ODER min. 10 Meter
+    const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
+    const TRACK_DIST_THRESHOLD_KM = 0.010; // 10 Meter
 
     let map = null;
     let startMarker = null;
@@ -249,6 +283,7 @@
     let isochronePolygon = null;
 
     let startCoord = null;
+    let startAddress = "Noch nicht geladen";
     let currentCoord = null;
     let lastRoutedCoord = null;
 
@@ -260,18 +295,20 @@
     let routedDurationSeconds = 0;
     let isCalculatingIsochrone = false;
     let baseIsochroneMinutes = null;
-    let baseIsochronePoints = []; // Basis-Polygon zur mathematischen Skalierung
+    let baseIsochronePoints = [];
 
     let isRecording = false;
     let trackPoints = [];
     let waypoints = [];
     let waypointMarkers = [];
+    let lastTrackPointTime = 0;
 
     let geoWatchId = null;
     let calcInterval = null;
 
     const targetInput = document.getElementById("targetTime");
     const reserveInput = document.getElementById("reserveTime");
+    const startAddrDisplay = document.getElementById("startAddrDisplay");
 
     function saveStateToStorage() {
       if (!isRecording) return;
@@ -280,6 +317,7 @@
         targetTime: targetInput.value,
         reserveTime: reserveInput.value,
         startCoord,
+        startAddress,
         totalElevationGain,
         trackPoints,
         waypoints
@@ -299,10 +337,12 @@
         targetInput.value = state.targetTime || "14:00";
         reserveInput.value = state.reserveTime || "30";
         startCoord = state.startCoord;
+        startAddress = state.startAddress || "Gespeicherter Startort";
         totalElevationGain = state.totalElevationGain || 0;
         trackPoints = state.trackPoints || [];
         waypoints = state.waypoints || [];
 
+        startAddrDisplay.textContent = `Start: ${startAddress}`;
         document.getElementById("startWalkBtn").textContent = "🔄 Aktiv";
         document.getElementById("startWalkBtn").className = "btn-primary";
         return true;
@@ -311,14 +351,33 @@
       }
     }
 
+    // Reverse Geocoding via OSM Nominatim (ohne API-Key)
+    async function fetchAddress(lat, lng) {
+      try {
+        startAddrDisplay.textContent = "Start: Suche Adresse...";
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`);
+        const data = await res.json();
+        if (data && data.display_name) {
+          const parts = data.display_name.split(",");
+          startAddress = parts.slice(0, 3).join(",").trim();
+        } else {
+          startAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        }
+      } catch (e) {
+        startAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      }
+      startAddrDisplay.textContent = `Start: ${startAddress}`;
+      saveStateToStorage();
+    }
+
     function initMap(lat, lng) {
       map = L.map("map", { zoomControl: false }).setView([lat, lng], 16);
 
-      // OLED-optimierte dunkle Basiskarte (spart Display-Energie)
+      // Standard OSM Kacheln (100% frei & schlüssellos)
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
-        attribution: "© OpenStreetMap Mitwirkende"
-        }).addTo(map);
+        attribution: "© OpenStreetMap"
+      }).addTo(map);
 
       isochronePolygon = L.polygon([], {
         color: '#ef4444',
@@ -330,9 +389,9 @@
 
       const startIcon = L.divIcon({
         className: '',
-        html: "<div style='background-color:#3b82f6;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.8);'></div>",
-        iconSize: [14, 14],
-        iconAnchor: [7, 7]
+        html: "<div style='background-color:#3b82f6;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 5px rgba(0,0,0,0.8);'></div>",
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
       });
 
       const currentIcon = L.divIcon({
@@ -360,8 +419,8 @@
 
       walkedTrackLine = L.polyline([], {
         color: '#ea580c',
-        weight: 3,
-        opacity: 0.9
+        weight: 4,
+        opacity: 0.95
       }).addTo(map);
 
       renderStoredWaypoints();
@@ -376,8 +435,8 @@
         const wpIcon = L.divIcon({
           className: '',
           html: `<div class="waypoint-badge">${wp.number}</div>`,
-          iconSize: [20, 20],
-          iconAnchor: [10, 10]
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
         });
 
         const eleText = wp.ele !== null ? `<br>Höhe: ${Math.round(wp.ele)} m` : '';
@@ -415,11 +474,10 @@
           returnRouteLine.setLatLngs(latLngs);
         }
       } catch (err) {
-        // Leise ignorieren im Standby / bei schlechtem Netz
+        // Leise ignorieren
       }
     }
 
-    // Akkusparende Isochrone (12 Strahlen + lokale mathematische Skalierung)
     async function calculateIsochrone12Rays(maxWalkMinutes) {
       if (!startCoord || maxWalkMinutes <= 0 || isCalculatingIsochrone) {
         if (maxWalkMinutes <= 0 && isochronePolygon) isochronePolygon.setLatLngs([]);
@@ -487,7 +545,6 @@
       isCalculatingIsochrone = false;
     }
 
-    // Mathematische Zwischen-Skalierung (spart 90% der Netzabfragen)
     function scaleExistingIsochrone(currentMinutes) {
       if (!baseIsochronePoints.length || !baseIsochroneMinutes || baseIsochroneMinutes <= 0) return;
       const factor = currentMinutes / baseIsochroneMinutes;
@@ -540,11 +597,9 @@
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
-      // Halbe Pufferzeit für Isochrone
-      const totalAvailableMinutes = ((targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes)/2;
+      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - (reserveMinutes / 2);
       const validMins = Math.max(0, totalAvailableMinutes);
 
-      // Neuberechnung über Netzwerk nur alle 5 Min oder initial, ansonsten reine CPU-Skalierung
       if (baseIsochroneMinutes === null || Math.abs(validMins - baseIsochroneMinutes) >= ISOCHRONE_RECALC_INTERVAL_MIN) {
         calculateIsochrone12Rays(validMins);
       } else {
@@ -574,6 +629,7 @@
       bufferDisplay.className = `status-value ${colorClass}`;
     }
 
+    // Standort speichern / Wegpunkt mit Nummer
     function addWaypoint() {
       if (!currentCoord) return;
 
@@ -594,8 +650,8 @@
       const wpIcon = L.divIcon({
         className: '',
         html: `<div class="waypoint-badge">${index}</div>`,
-        iconSize: [20, 20],
-        iconAnchor: [10, 10]
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
       });
 
       const eleText = currentAltitude !== null ? `<br>Höhe: ${Math.round(currentAltitude)} m` : '';
@@ -608,28 +664,43 @@
       saveStateToStorage();
     }
 
+    // Feinere Aufzeichnung: alle 15 Sekunden ODER alle 10 Meter
     function recordCurrentPosition(lat, lng, altitude) {
       if (!isRecording) return;
-      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
 
+      let shouldRecord = false;
+
+      if (trackPoints.length === 0) {
+        shouldRecord = true;
+      } else {
+        const last = trackPoints[trackPoints.length - 1];
+        const distKm = calculateDistanceKm(lat, lng, last.lat, last.lng);
+        const timeDiffMs = nowMs - lastTrackPointTime;
+
+        if (distKm >= TRACK_DIST_THRESHOLD_KM || timeDiffMs >= TRACK_TIME_THRESHOLD_MS) {
+          shouldRecord = true;
+        }
+      }
+
+      if (!shouldRecord) return;
+
+      lastTrackPointTime = nowMs;
+
+      // Höhenanstieg berechnen
       if (altitude !== null) {
         if (lastValidEle !== null) {
           const diff = altitude - lastValidEle;
-          if (diff >= 2.0) {
+          if (diff >= 1.5) {
             totalElevationGain += diff;
             lastValidEle = altitude;
-          } else if (diff <= -2.0) {
+          } else if (diff <= -1.5) {
             lastValidEle = altitude;
           }
         } else {
           lastValidEle = altitude;
         }
-      }
-
-      if (trackPoints.length > 0) {
-        const last = trackPoints[trackPoints.length - 1];
-        const distKm = calculateDistanceKm(lat, lng, last.lat, last.lng);
-        if (distKm < 0.005) return; // Unter 5 m wird gefiltert
       }
 
       trackPoints.push({
@@ -655,6 +726,7 @@
       if (!map) {
         if (!startCoord) {
           startCoord = { lat, lng, ele: currentAltitude };
+          fetchAddress(lat, lng);
         }
         lastRoutedCoord = { lat, lng };
         initMap(lat, lng);
@@ -675,42 +747,17 @@
 
     function startGpsWatch() {
       if ("geolocation" in navigator && geoWatchId === null) {
-        // maximumAge: 30000 nutzt gecachte Positionen anderer Apps zur Akkuschonung
         geoWatchId = navigator.geolocation.watchPosition(handlePosition, (err) => {
           console.warn(`GPS-Fehler: ${err.message}`);
         }, {
           enableHighAccuracy: true,
-          timeout: 20000,
-          maximumAge: 30000
+          timeout: 10000,
+          maximumAge: 5000
         });
       }
     }
 
-    function stopGpsWatch() {
-      if (geoWatchId !== null) {
-        navigator.geolocation.clearWatch(geoWatchId);
-        geoWatchId = null;
-      }
-    }
-
-    // --- Standby-Erkennung (Page Visibility API) ---
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        // App im Hintergrund / Screen gesperrt: CPU-Timer stoppen
-        if (calcInterval) {
-          clearInterval(calcInterval);
-          calcInterval = null;
-        }
-      } else {
-        // Screen entsperrt: Sofortige Aktualisierung & Timer fortsetzen
-        updateCalculations();
-        if (!calcInterval) {
-          calcInterval = setInterval(updateCalculations, 1000);
-        }
-      }
-    });
-
-    // GPX-Export
+    // GPX-Export mit Route, Stopps und Höhenprofil
     function generateAndDownloadGPX() {
       let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
       gpx += `<gpx version="1.1" creator="CityWalkTracker" xmlns="http://www.topografix.com/GPX/1/1">\n`;
@@ -719,7 +766,7 @@
       if (startCoord) {
         gpx += `  <wpt lat="${startCoord.lat}" lon="${startCoord.lng}">\n`;
         if (startCoord.ele !== null && startCoord.ele !== undefined) gpx += `    <ele>${startCoord.ele}</ele>\n`;
-        gpx += `    <name>Startpunkt</name>\n  </wpt>\n`;
+        gpx += `    <name>Start: ${startAddress.replace(/&/g, '&amp;')}</name>\n  </wpt>\n`;
       }
 
       waypoints.forEach(wp => {
@@ -748,18 +795,26 @@
       URL.revokeObjectURL(url);
     }
 
-    // Buttons
-    document.getElementById("startWalkBtn").addEventListener("click", () => {
-      isRecording = true;
-      trackPoints = [];
-      waypoints = [];
-      totalElevationGain = 0;
-      lastValidEle = null;
+    // --- Buttons mit Sicherheitsabfragen ---
 
-      waypointMarkers.forEach(m => map && map.removeLayer(m));
-      waypointMarkers = [];
+    // Start-Knopf (mit Bestätigung)
+    document.getElementById("startWalkBtn").addEventListener("click", () => {
+      if (isRecording) {
+        const proceed = confirm("Es läuft bereits eine Tour. Möchtest du diese wirklich verwerfen und eine NEUE Tour am aktuellen Ort starten?");
+        if (!proceed) return;
+      }
 
       navigator.geolocation.getCurrentPosition((pos) => {
+        isRecording = true;
+        trackPoints = [];
+        waypoints = [];
+        totalElevationGain = 0;
+        lastValidEle = null;
+        lastTrackPointTime = 0;
+
+        waypointMarkers.forEach(m => map && map.removeLayer(m));
+        waypointMarkers = [];
+
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         currentAltitude = pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : null;
@@ -775,6 +830,7 @@
         if (walkedTrackLine) walkedTrackLine.setLatLngs([]);
         if (isochronePolygon) isochronePolygon.setLatLngs([]);
 
+        fetchAddress(lat, lng);
         recordCurrentPosition(lat, lng, currentAltitude);
         saveStateToStorage();
         fetchFootRoute();
@@ -782,21 +838,40 @@
 
         document.getElementById("startWalkBtn").textContent = "🔄 Aktiv";
         document.getElementById("startWalkBtn").className = "btn-primary";
-      });
+      }, (err) => {
+        alert("GPS-Position konnte nicht ermittelt werden: " + err.message);
+      }, { enableHighAccuracy: true });
     });
 
+    // Startort neu laden
+    document.getElementById("reloadStartBtn").addEventListener("click", () => {
+      if (!startCoord) {
+        alert("Kein Startpunkt vorhanden.");
+        return;
+      }
+      fetchAddress(startCoord.lat, startCoord.lng);
+      fetchFootRoute();
+      updateCalculations();
+    });
+
+    // Stopp / Waypoint merken
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
       navigator.geolocation.getCurrentPosition((pos) => {
         handlePosition(pos);
         addWaypoint();
-      }, () => addWaypoint());
+      }, () => addWaypoint(), { enableHighAccuracy: true });
     });
 
+    // Tour Stoppen & GPX Speichern (mit Bestätigung)
     document.getElementById("stopTourBtn").addEventListener("click", () => {
-      if (trackPoints.length === 0 && waypoints.length === 0) {
-        alert("Keine Track- oder Haltepunkte aufgezeichnet.");
+      if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
+        alert("Keine Tour aktiv.");
         return;
       }
+
+      const confirmStop = confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei herunterladen?");
+      if (!confirmStop) return;
+
       generateAndDownloadGPX();
       isRecording = false;
       localStorage.removeItem(STORAGE_KEY);
@@ -816,7 +891,21 @@
       updateCalculations();
     });
 
-    // Start-Logik
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        if (calcInterval) {
+          clearInterval(calcInterval);
+          calcInterval = null;
+        }
+      } else {
+        updateCalculations();
+        if (!calcInterval) {
+          calcInterval = setInterval(updateCalculations, 1000);
+        }
+      }
+    });
+
+    // Initialisierung
     const hasRestored = loadStateFromStorage();
     if (!hasRestored) {
       const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
