@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker</title>
+  <title>City Walk Return & Waypoint Tracker</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -17,7 +17,8 @@
       --status-green: #10b981;
       --status-yellow: #f59e0b;
       --status-red: #ef4444;
-      --accent: #3b82f6;
+      --accent-blue: #3b82f6;
+      --accent-orange: #f97316;
     }
 
     * {
@@ -36,12 +37,13 @@
       overflow: hidden;
     }
 
+    /* Dashboard Header */
     #dashboard {
       background-color: var(--card-bg);
-      padding: 12px 16px;
+      padding: 10px 14px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
       box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
       z-index: 1000;
     }
@@ -50,7 +52,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 6px;
+      flex-wrap: wrap;
     }
 
     .input-group {
@@ -60,7 +63,7 @@
     }
 
     label {
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       color: var(--text-sub);
     }
 
@@ -68,33 +71,42 @@
       background: #374151;
       border: 1px solid #4b5563;
       color: #fff;
-      padding: 5px 8px;
+      padding: 4px 6px;
       border-radius: 6px;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       outline: none;
     }
 
+    .btn-group {
+      display: flex;
+      gap: 6px;
+    }
+
     button {
-      background-color: var(--accent);
-      color: #fff;
       border: none;
-      padding: 6px 12px;
+      padding: 6px 10px;
       border-radius: 6px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       cursor: pointer;
       font-weight: 500;
+      color: #fff;
+      transition: opacity 0.2s;
     }
 
     button:active {
       opacity: 0.8;
     }
 
+    .btn-primary { background-color: var(--accent-blue); }
+    .btn-orange { background-color: var(--accent-orange); }
+
+    /* Display Box */
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
       background: #111827;
-      padding: 10px;
+      padding: 8px 10px;
       border-radius: 8px;
       text-align: center;
     }
@@ -106,14 +118,14 @@
     }
 
     .status-label {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--text-sub);
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
 
     .status-value {
-      font-size: 1.25rem;
+      font-size: 1.2rem;
       font-weight: 700;
       transition: color 0.3s ease;
     }
@@ -123,16 +135,33 @@
     .color-red { color: var(--status-red); }
 
     .info-bar {
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       color: var(--text-sub);
       display: flex;
       justify-content: space-between;
       padding-top: 2px;
     }
 
+    /* Map */
     #map {
       flex: 1;
       width: 100%;
+    }
+
+    /* Custom Waypoint Icon Style */
+    .waypoint-badge {
+      background-color: var(--accent-orange);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 5px rgba(0,0,0,0.6);
     }
   </style>
 </head>
@@ -141,10 +170,13 @@
   <div id="dashboard">
     <div class="controls-row">
       <div class="input-group">
-        <label for="targetTime">Soll-Rückkehr:</label>
+        <label for="targetTime">Soll:</label>
         <input type="time" id="targetTime" />
       </div>
-      <button id="setStartBtn">Neuer Startpunkt</button>
+      <div class="btn-group">
+        <button id="addWaypointBtn" class="btn-orange">📍 Punkt merken</button>
+        <button id="setStartBtn" class="btn-primary">Neuer Start</button>
+      </div>
     </div>
 
     <div class="status-panel">
@@ -159,8 +191,9 @@
     </div>
 
     <div class="info-bar">
-      <span id="distDisplay">Distanz: -- km</span>
+      <span id="distDisplay">Rückweg: -- km</span>
       <span id="walkDurationDisplay">Gehzeit: -- Min</span>
+      <span id="waypointCountDisplay">Markierungen: 0</span>
     </div>
   </div>
 
@@ -175,7 +208,8 @@
     let map = null;
     let startMarker = null;
     let currentMarker = null;
-    let routePolyline = null;
+    let returnRouteLine = null;
+    let walkedTrackLine = null;
 
     let startCoord = null;
     let currentCoord = null;
@@ -184,6 +218,11 @@
     let routedDistanceMeters = 0;
     let routedDurationSeconds = 0;
 
+    // Array für gespeicherte Wegpunkte
+    const waypoints = [];
+    const waypointMarkers = [];
+
+    // Standard-Rückkehrzeit (Jetzt + 2 Stunden)
     const targetInput = document.getElementById("targetTime");
     const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
     targetInput.value = defaultTarget.toTimeString().substring(0, 5);
@@ -195,33 +234,44 @@
         attribution: "© OpenStreetMap"
       }).addTo(map);
 
+      // Startpunkt-Icon (Blau)
       const startIcon = L.divIcon({
-        className: 'custom-div-icon',
-        html: "<div style='background-color:#3b82f6;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.5);'></div>",
-        iconSize: [14, 14],
-        iconAnchor: [7, 7]
+        className: '',
+        html: "<div style='background-color:#3b82f6;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 5px rgba(0,0,0,0.6);'></div>",
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
       });
 
+      // Aktueller Standort-Icon (Grün)
       const currentIcon = L.divIcon({
-        className: 'custom-div-icon',
+        className: '',
         html: "<div style='background-color:#10b981;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);'></div>",
         iconSize: [16, 16],
         iconAnchor: [8, 8]
       });
 
-      startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(map).bindPopup("Startpunkt");
-      currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("Aktueller Ort");
+      startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(map).bindPopup("<b>Startpunkt</b>");
+      currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("<b>Aktueller Ort</b>");
 
-      routePolyline = L.polyline([], {
+      // Blaue Linie für den berechneten Rückweg
+      returnRouteLine = L.polyline([], {
         color: '#3b82f6',
         weight: 5,
-        opacity: 0.8,
+        opacity: 0.85,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(map);
+
+      // Orange gestrichelte Linie für den zurückgelegten Weg der Zwischenstopps
+      walkedTrackLine = L.polyline([[lat, lng]], {
+        color: '#f97316',
+        weight: 3,
+        dashArray: '6, 6',
+        opacity: 0.9
+      }).addTo(map);
     }
 
-    // Fußweg-Routing über OSRM
+    // OSRM Fußweg-Routing für den Rückweg
     async function fetchFootRoute() {
       if (!startCoord || !currentCoord) return;
 
@@ -234,15 +284,13 @@
         if (data.routes && data.routes.length > 0) {
           const route = data.routes[0];
           routedDistanceMeters = route.distance;
-          // Eigene Gehgeschwindigkeit verwenden für konsistente Berechnung
           routedDurationSeconds = (routedDistanceMeters / 1000 / WALKING_SPEED_KMH) * 3600;
 
-          // GeoJSON-Koordinaten sind [lon, lat], Leaflet erwartet [lat, lon]
           const latLngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
-          routePolyline.setLatLngs(latLngs);
+          returnRouteLine.setLatLngs(latLngs);
         }
       } catch (err) {
-        console.warn("Routing-Dienst nicht erreichbar, Fallback auf Luftlinie:", err);
+        console.warn("Routing-API nicht erreichbar, nutze Schätzung:", err);
       }
     }
 
@@ -254,8 +302,7 @@
         Math.sin(dLat / 2) * Math.sin(dLat / 2) +
         Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
         Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return R * c;
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
     }
 
     function updateCalculations() {
@@ -269,7 +316,6 @@
         walkKm = routedDistanceMeters / 1000;
         walkMs = routedDurationSeconds * 1000;
       } else {
-        // Fallback falls Routing noch nicht geladen ist
         walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * 1.3;
         walkMs = (walkKm / WALKING_SPEED_KMH) * 60 * 60 * 1000;
       }
@@ -293,7 +339,7 @@
 
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
       bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
-      distDisplay.textContent = `Distanz: ${walkKm.toFixed(2)} km`;
+      distDisplay.textContent = `Rückweg: ${walkKm.toFixed(2)} km`;
       walkDurationDisplay.textContent = `Gehzeit: ~${Math.round(walkMs / 60000)} Min`;
 
       let colorClass = "color-green";
@@ -305,6 +351,47 @@
 
       etaDisplay.className = `status-value ${colorClass}`;
       bufferDisplay.className = `status-value ${colorClass}`;
+    }
+
+    // Wegpunkt speichern
+    function addWaypoint() {
+      if (!currentCoord) return;
+
+      const index = waypoints.length + 1;
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const distFromStart = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng).toFixed(2);
+
+      const pointData = {
+        lat: currentCoord.lat,
+        lng: currentCoord.lng,
+        time: timeStr,
+        number: index
+      };
+      waypoints.push(pointData);
+
+      // Marker mit Ziffer erstellen
+      const wpIcon = L.divIcon({
+        className: '',
+        html: `<div class="waypoint-badge">${index}</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+      });
+
+      const marker = L.marker([currentCoord.lat, currentCoord.lng], { icon: wpIcon })
+        .addTo(map)
+        .bindPopup(`<b>Stopp #${index}</b><br>Uhrzeit: ${timeStr}<br>Luftlinie Start: ${distFromStart} km`);
+
+      waypointMarkers.push(marker);
+
+      // Pfad des gegangenen Weges aktualisieren (Startpunkt -> Stopp 1 -> Stopp 2 ...)
+      const trackCoords = [
+        [startCoord.lat, startCoord.lng],
+        ...waypoints.map(w => [w.lat, w.lng]),
+        [currentCoord.lat, currentCoord.lng]
+      ];
+      walkedTrackLine.setLatLngs(trackCoords);
+
+      document.getElementById("waypointCountDisplay").textContent = `Markierungen: ${waypoints.length}`;
     }
 
     function handlePosition(position) {
@@ -320,7 +407,15 @@
         currentCoord = { lat, lng };
         currentMarker.setLatLng([lat, lng]);
 
-        // Neue Route nur abfragen, wenn man sich mindestens 30 Meter bewegt hat
+        // Den aktuellen Strang der gelaufenen Linie zum aktuellen Standort fortführen
+        const trackCoords = [
+          [startCoord.lat, startCoord.lng],
+          ...waypoints.map(w => [w.lat, w.lng]),
+          [lat, lng]
+        ];
+        walkedTrackLine.setLatLngs(trackCoords);
+
+        // Routing nur bei deutlicher Bewegung (>30m) neu anfragen
         if (!lastFetchedCoord || calculateDistanceKm(lat, lng, lastFetchedCoord.lat, lastFetchedCoord.lng) > 0.03) {
           lastFetchedCoord = { lat, lng };
           fetchFootRoute();
@@ -334,11 +429,23 @@
       console.warn(`GPS-Fehler: ${error.message}`);
     }
 
+    // Button-Events
+    document.getElementById("addWaypointBtn").addEventListener("click", addWaypoint);
+
     document.getElementById("setStartBtn").addEventListener("click", () => {
       if (currentCoord) {
+        // Alten Verlauf & Marker löschen
+        waypointMarkers.forEach(m => map.removeLayer(m));
+        waypointMarkers.length = 0;
+        waypoints.length = 0;
+
         startCoord = { ...currentCoord };
         startMarker.setLatLng([startCoord.lat, startCoord.lng]);
-        routePolyline.setLatLngs([]);
+        walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
+        returnRouteLine.setLatLngs([]);
+
+        document.getElementById("waypointCountDisplay").textContent = "Markierungen: 0";
+
         fetchFootRoute();
         updateCalculations();
       }
