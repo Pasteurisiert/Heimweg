@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker (36 Strahlen Isochrone)</title>
+  <title>City Walk Tracker & GPX Recorder (Eco-OLED)</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
     :root {
-      --bg-color: #121826;
-      --card-bg: #1f2937;
-      --text-main: #f9fafb;
+      --bg-color: #000000;       /* Echtes Schwarz für OLED-Stromersparnis */
+      --card-bg: #111111;
+      --text-main: #f3f4f6;
       --text-sub: #9ca3af;
       --status-green: #10b981;
       --status-yellow: #f59e0b;
       --status-red: #ef4444;
-      --accent-blue: #3b82f6;
-      --accent-orange: #f97316;
+      --accent-blue: #2563eb;
+      --accent-orange: #ea580c;
     }
 
     * {
@@ -37,16 +37,15 @@
       overflow: hidden;
     }
 
-    /* Sticky Header */
     #dashboard {
       position: sticky;
       top: 0;
       background-color: var(--card-bg);
-      padding: 10px 14px;
+      padding: 8px 12px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+      gap: 6px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
       z-index: 2000;
     }
 
@@ -61,86 +60,90 @@
     .inputs-container {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
     .input-group {
       display: flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
     }
 
     label {
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       color: var(--text-sub);
       font-weight: 500;
     }
 
     input[type="time"],
     input[type="number"] {
-      background: #374151;
-      border: 1px solid #4b5563;
+      background: #1f2937;
+      border: 1px solid #374151;
       color: #fff;
-      padding: 4px 6px;
-      border-radius: 6px;
-      font-size: 0.9rem;
+      padding: 3px 5px;
+      border-radius: 5px;
+      font-size: 0.85rem;
       outline: none;
     }
 
     input[type="number"] {
-      width: 58px;
+      width: 50px;
       text-align: center;
     }
 
     .btn-group {
       display: flex;
-      gap: 6px;
+      gap: 5px;
+      flex-wrap: wrap;
     }
 
     button {
       border: none;
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-size: 0.8rem;
+      padding: 5px 9px;
+      border-radius: 5px;
+      font-size: 0.78rem;
       cursor: pointer;
-      font-weight: 500;
+      font-weight: 600;
       color: #fff;
       transition: opacity 0.2s;
     }
 
     button:active {
-      opacity: 0.8;
+      opacity: 0.7;
     }
 
     .btn-primary { background-color: var(--accent-blue); }
     .btn-orange { background-color: var(--accent-orange); }
+    .btn-green { background-color: #059669; }
+    .btn-red { background-color: #dc2626; }
 
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      background: #111827;
-      padding: 8px 10px;
-      border-radius: 8px;
+      gap: 6px;
+      background: #080808;
+      padding: 6px 8px;
+      border-radius: 6px;
       text-align: center;
+      border: 1px solid #1f2937;
     }
 
     .status-item {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 1px;
     }
 
     .status-label {
-      font-size: 0.7rem;
+      font-size: 0.65rem;
       color: var(--text-sub);
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
 
     .status-value {
-      font-size: 1.2rem;
+      font-size: 1.15rem;
       font-weight: 700;
       transition: color 0.3s ease;
     }
@@ -150,31 +153,33 @@
     .color-red { color: var(--status-red); }
 
     .info-bar {
-      font-size: 0.72rem;
+      font-size: 0.7rem;
       color: var(--text-sub);
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
       padding-top: 2px;
     }
 
     #map {
       flex: 1;
       width: 100%;
+      background-color: #000;
     }
 
     .waypoint-badge {
       background-color: var(--accent-orange);
       color: #fff;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      border: 2px solid #fff;
+      border: 1.5px solid #fff;
       border-radius: 50%;
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 5px rgba(0,0,0,0.6);
+      box-shadow: 0 0 4px rgba(0,0,0,0.8);
     }
   </style>
 </head>
@@ -190,12 +195,13 @@
         <div class="input-group">
           <label for="reserveTime">Reserve:</label>
           <input type="number" id="reserveTime" value="30" min="0" max="180" step="5" />
-          <span style="font-size: 0.75rem; color: var(--text-sub);">Min</span>
+          <span style="font-size: 0.7rem; color: var(--text-sub);">Min</span>
         </div>
       </div>
       <div class="btn-group">
-        <button id="addWaypointBtn" class="btn-orange">📍 Punkt merken</button>
-        <button id="setStartBtn" class="btn-primary">Neuer Start</button>
+        <button id="startWalkBtn" class="btn-green">▶ Start</button>
+        <button id="addWaypointBtn" class="btn-orange">📍 Stopp</button>
+        <button id="stopTourBtn" class="btn-red">⏹ GPX</button>
       </div>
     </div>
 
@@ -211,9 +217,12 @@
     </div>
 
     <div class="info-bar">
-      <span id="distDisplay">Rückweg: -- km</span>
-      <span id="speedDisplay">Tempo: 3.5 km/h</span>
-      <span id="isochroneStatus">Isochrone: 36 Strahlen</span>
+      <span id="distDisplay">Rück: -- km</span>
+      <span id="elevationDisplay">Höhe: -- m</span>
+      <span id="trackPointsDisplay">Track: 0 Pkt</span>
+      <span id="speedDisplay">3.5 km/h</span>
+      <span id="isochroneStatus">Eco-Isochrone</span>
+      <span id="waypointCountDisplay">Stopps: 0</span>
     </div>
   </div>
 
@@ -223,12 +232,14 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
+    // --- Konfiguration & Optimierungsparameter ---
     const WALKING_SPEED_KMH = 3.5;
     const DETOUR_FACTOR = 1.30;
-    const GPS_POLL_INTERVAL_MS = 60 * 1000;
-    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10;
-    const ISOCHRONE_RAYS = 36; // 36 Strahlen (alle 10 Grad)
-    const BATCH_SIZE = 6;       // 6 parallele API-Anfragen pro Block
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle
+    const ISOCHRONE_RAYS = 12;                  // 12 statt 36 Strahlen (spart ~67% Netzwerk)
+    const BATCH_SIZE = 4;
+    const ISOCHRONE_RECALC_INTERVAL_MIN = 5;    // Echtes Isochronen-Netzwerkrouting nur alle 5 Min
+    const STORAGE_KEY = "city_walk_tour_state";
 
     let map = null;
     let startMarker = null;
@@ -241,67 +252,150 @@
     let currentCoord = null;
     let lastRoutedCoord = null;
 
+    let currentAltitude = null;
+    let totalElevationGain = 0;
+    let lastValidEle = null;
+
     let routedDistanceMeters = 0;
     let routedDurationSeconds = 0;
     let isCalculatingIsochrone = false;
-    let lastCalculatedMinutes = null;
+    let baseIsochroneMinutes = null;
+    let baseIsochronePoints = []; // Basis-Polygon zur mathematischen Skalierung
 
-    const waypoints = [];
-    const waypointMarkers = [];
+    let isRecording = false;
+    let trackPoints = [];
+    let waypoints = [];
+    let waypointMarkers = [];
+
+    let geoWatchId = null;
+    let calcInterval = null;
 
     const targetInput = document.getElementById("targetTime");
     const reserveInput = document.getElementById("reserveTime");
 
-    const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
-    targetInput.value = defaultTarget.toTimeString().substring(0, 5);
+    function saveStateToStorage() {
+      if (!isRecording) return;
+      const state = {
+        isRecording,
+        targetTime: targetInput.value,
+        reserveTime: reserveInput.value,
+        startCoord,
+        totalElevationGain,
+        trackPoints,
+        waypoints
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    function loadStateFromStorage() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (!saved) return false;
+
+      try {
+        const state = JSON.parse(saved);
+        if (!state.isRecording) return false;
+
+        isRecording = true;
+        targetInput.value = state.targetTime || "14:00";
+        reserveInput.value = state.reserveTime || "30";
+        startCoord = state.startCoord;
+        totalElevationGain = state.totalElevationGain || 0;
+        trackPoints = state.trackPoints || [];
+        waypoints = state.waypoints || [];
+
+        document.getElementById("startWalkBtn").textContent = "🔄 Aktiv";
+        document.getElementById("startWalkBtn").className = "btn-primary";
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
 
     function initMap(lat, lng) {
       map = L.map("map", { zoomControl: false }).setView([lat, lng], 16);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+
+      // OLED-optimierte dunkle Basiskarte (spart Display-Energie)
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
-        attribution: "© OpenStreetMap"
+        attribution: "© OpenStreetMap © CARTO",
+        subdomains: "abcd"
       }).addTo(map);
 
-      // 36-Strahlen Isochronen-Polygon
       isochronePolygon = L.polygon([], {
         color: '#ef4444',
         fillColor: '#ef4444',
-        fillOpacity: 0.14,
-        weight: 2,
-        dashArray: '4, 4'
+        fillOpacity: 0.12,
+        weight: 1.5,
+        dashArray: '3, 4'
       }).addTo(map);
 
       const startIcon = L.divIcon({
         className: '',
-        html: "<div style='background-color:#3b82f6;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 5px rgba(0,0,0,0.6);'></div>",
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
+        html: "<div style='background-color:#3b82f6;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.8);'></div>",
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
       });
 
       const currentIcon = L.divIcon({
         className: '',
-        html: "<div style='background-color:#10b981;width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 6px rgba(0,0,0,0.6);'></div>",
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
+        html: "<div style='background-color:#10b981;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 5px rgba(0,0,0,0.8);'></div>",
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
       });
 
-      startMarker = L.marker([lat, lng], { icon: startIcon }).addTo(map).bindPopup("<b>Startpunkt</b>");
-      currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("<b>Aktueller Ort</b>");
+      startMarker = L.marker([startCoord ? startCoord.lat : lat, startCoord ? startCoord.lng : lng], { icon: startIcon })
+        .addTo(map)
+        .bindPopup("<b>Startpunkt</b>");
+
+      currentMarker = L.marker([lat, lng], { icon: currentIcon })
+        .addTo(map)
+        .bindPopup("<b>Aktueller Ort</b>");
 
       returnRouteLine = L.polyline([], {
         color: '#3b82f6',
-        weight: 5,
+        weight: 4,
         opacity: 0.85,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(map);
 
-      walkedTrackLine = L.polyline([[lat, lng]], {
-        color: '#f97316',
+      walkedTrackLine = L.polyline([], {
+        color: '#ea580c',
         weight: 3,
-        dashArray: '6, 6',
         opacity: 0.9
       }).addTo(map);
+
+      renderStoredWaypoints();
+      updateWalkedPathDisplay();
+    }
+
+    function renderStoredWaypoints() {
+      waypointMarkers.forEach(m => map.removeLayer(m));
+      waypointMarkers = [];
+
+      waypoints.forEach((wp) => {
+        const wpIcon = L.divIcon({
+          className: '',
+          html: `<div class="waypoint-badge">${wp.number}</div>`,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        });
+
+        const eleText = wp.ele !== null ? `<br>Höhe: ${Math.round(wp.ele)} m` : '';
+        const m = L.marker([wp.lat, wp.lng], { icon: wpIcon })
+          .addTo(map)
+          .bindPopup(`<b>Stopp #${wp.number}</b><br>Zeit: ${wp.time}${eleText}`);
+        waypointMarkers.push(m);
+      });
+
+      document.getElementById("waypointCountDisplay").textContent = `Stopps: ${waypoints.length}`;
+    }
+
+    function updateWalkedPathDisplay() {
+      if (!walkedTrackLine) return;
+      const latLngs = trackPoints.map(p => [p.lat, p.lng]);
+      walkedTrackLine.setLatLngs(latLngs);
+      document.getElementById("trackPointsDisplay").textContent = `Track: ${trackPoints.length} Pkt`;
     }
 
     async function fetchFootRoute() {
@@ -322,20 +416,18 @@
           returnRouteLine.setLatLngs(latLngs);
         }
       } catch (err) {
-        console.warn("Routing-API nicht erreichbar:", err);
+        // Leise ignorieren im Standby / bei schlechtem Netz
       }
     }
 
-    // Berechnung der 36 Strahlen in kontrollierten Batches (zur Vermeidung von OSRM Rate-Limits)
-    async function calculateIsochrone36Rays(maxWalkMinutes) {
+    // Akkusparende Isochrone (12 Strahlen + lokale mathematische Skalierung)
+    async function calculateIsochrone12Rays(maxWalkMinutes) {
       if (!startCoord || maxWalkMinutes <= 0 || isCalculatingIsochrone) {
         if (maxWalkMinutes <= 0 && isochronePolygon) isochronePolygon.setLatLngs([]);
         return;
       }
 
       isCalculatingIsochrone = true;
-      document.getElementById("isochroneStatus").textContent = "Isochrone: Rechnet...";
-
       const maxDistMeters = (maxWalkMinutes / 60) * WALKING_SPEED_KMH * 1000;
       const boundaryPoints = new Array(ISOCHRONE_RAYS);
 
@@ -370,17 +462,13 @@
             }
           }
         } catch (e) {
-          // Fallback bei API-Limit: Geometrischer Offset mit Standard-Wegenetzfaktor
-          const fallbackLat = startCoord.lat + (latOffset / DETOUR_FACTOR);
-          const fallbackLng = startCoord.lng + (lngOffset / DETOUR_FACTOR);
-          boundaryPoints[i] = [fallbackLat, fallbackLng];
+          boundaryPoints[i] = [startCoord.lat + (latOffset / DETOUR_FACTOR), startCoord.lng + (lngOffset / DETOUR_FACTOR)];
           return;
         }
 
         boundaryPoints[i] = [startCoord.lat + (latOffset / DETOUR_FACTOR), startCoord.lng + (lngOffset / DETOUR_FACTOR)];
       };
 
-      // In Gruppen anfragen, um Serverüberlastung zu verhindern
       for (let i = 0; i < ISOCHRONE_RAYS; i += BATCH_SIZE) {
         const batch = [];
         for (let j = i; j < i + BATCH_SIZE && j < ISOCHRONE_RAYS; j++) {
@@ -389,14 +477,29 @@
         await Promise.all(batch);
       }
 
-      const validPoints = boundaryPoints.filter(p => p !== undefined);
-      if (validPoints.length >= 3 && isochronePolygon) {
-        isochronePolygon.setLatLngs(validPoints);
-        document.getElementById("isochroneStatus").textContent = `Isochrone: 36 Strahlen (${Math.round(maxWalkMinutes)} Min)`;
+      baseIsochronePoints = boundaryPoints.filter(p => p !== undefined);
+      baseIsochroneMinutes = maxWalkMinutes;
+
+      if (baseIsochronePoints.length >= 3 && isochronePolygon) {
+        isochronePolygon.setLatLngs(baseIsochronePoints);
+        document.getElementById("isochroneStatus").textContent = `Iso: ~${Math.round(maxWalkMinutes)}m`;
       }
 
       isCalculatingIsochrone = false;
-      lastCalculatedMinutes = Math.round(maxWalkMinutes);
+    }
+
+    // Mathematische Zwischen-Skalierung (spart 90% der Netzabfragen)
+    function scaleExistingIsochrone(currentMinutes) {
+      if (!baseIsochronePoints.length || !baseIsochroneMinutes || baseIsochroneMinutes <= 0) return;
+      const factor = currentMinutes / baseIsochroneMinutes;
+
+      const scaledPoints = baseIsochronePoints.map(pt => {
+        const lat = startCoord.lat + (pt[0] - startCoord.lat) * factor;
+        const lng = startCoord.lng + (pt[1] - startCoord.lng) * factor;
+        return [lat, lng];
+      });
+
+      if (isochronePolygon) isochronePolygon.setLatLngs(scaledPoints);
     }
 
     function calculateDistanceKm(lat1, lon1, lat2, lon2) {
@@ -438,20 +541,28 @@
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
-      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes;
+      // Halbe Pufferzeit für Isochrone
+      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - (reserveMinutes / 2);
+      const validMins = Math.max(0, totalAvailableMinutes);
 
-      // 36 Strahlen nur dann neu anfragen, wenn sich die verbleibende Zeit um mehr als 1 Minute geändert hat
-      if (lastCalculatedMinutes === null || Math.abs(Math.round(totalAvailableMinutes) - lastCalculatedMinutes) >= 1) {
-        calculateIsochrone36Rays(Math.max(0, totalAvailableMinutes));
+      // Neuberechnung über Netzwerk nur alle 5 Min oder initial, ansonsten reine CPU-Skalierung
+      if (baseIsochroneMinutes === null || Math.abs(validMins - baseIsochroneMinutes) >= ISOCHRONE_RECALC_INTERVAL_MIN) {
+        calculateIsochrone12Rays(validMins);
+      } else {
+        scaleExistingIsochrone(validMins);
       }
 
       const etaDisplay = document.getElementById("etaDisplay");
       const bufferDisplay = document.getElementById("bufferDisplay");
       const distDisplay = document.getElementById("distDisplay");
+      const elevationDisplay = document.getElementById("elevationDisplay");
 
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
       bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
-      distDisplay.textContent = `Rückweg: ${walkKm.toFixed(2)} km`;
+      distDisplay.textContent = `Rück: ${walkKm.toFixed(2)} km`;
+
+      const eleText = currentAltitude !== null ? `${Math.round(currentAltitude)}m` : '--';
+      elevationDisplay.textContent = `H: ${eleText} (↑${Math.round(totalElevationGain)}m)`;
 
       let colorClass = "color-green";
       if (bufferMinutes < reserveMinutes) {
@@ -468,13 +579,15 @@
       if (!currentCoord) return;
 
       const index = waypoints.length + 1;
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const distFromStart = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng).toFixed(2);
+      const isoTime = new Date().toISOString();
+      const localTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
       const pointData = {
         lat: currentCoord.lat,
         lng: currentCoord.lng,
-        time: timeStr,
+        ele: currentAltitude !== null ? Number(currentAltitude.toFixed(1)) : null,
+        time: localTimeStr,
+        isoTime: isoTime,
         number: index
       };
       waypoints.push(pointData);
@@ -482,46 +595,73 @@
       const wpIcon = L.divIcon({
         className: '',
         html: `<div class="waypoint-badge">${index}</div>`,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11]
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
       });
 
+      const eleText = currentAltitude !== null ? `<br>Höhe: ${Math.round(currentAltitude)} m` : '';
       const marker = L.marker([currentCoord.lat, currentCoord.lng], { icon: wpIcon })
         .addTo(map)
-        .bindPopup(`<b>Stopp #${index}</b><br>Uhrzeit: ${timeStr}<br>Luftlinie Start: ${distFromStart} km`);
+        .bindPopup(`<b>Stopp #${index}</b><br>Zeit: ${localTimeStr}${eleText}`);
 
       waypointMarkers.push(marker);
+      document.getElementById("waypointCountDisplay").textContent = `Stopps: ${waypoints.length}`;
+      saveStateToStorage();
+    }
 
-      const trackCoords = [
-        [startCoord.lat, startCoord.lng],
-        ...waypoints.map(w => [w.lat, w.lng]),
-        [currentCoord.lat, currentCoord.lng]
-      ];
-      walkedTrackLine.setLatLngs(trackCoords);
+    function recordCurrentPosition(lat, lng, altitude) {
+      if (!isRecording) return;
+      const nowIso = new Date().toISOString();
 
-      document.getElementById("waypointCountDisplay").textContent = `Markierungen: ${waypoints.length}`;
+      if (altitude !== null) {
+        if (lastValidEle !== null) {
+          const diff = altitude - lastValidEle;
+          if (diff >= 2.0) {
+            totalElevationGain += diff;
+            lastValidEle = altitude;
+          } else if (diff <= -2.0) {
+            lastValidEle = altitude;
+          }
+        } else {
+          lastValidEle = altitude;
+        }
+      }
+
+      if (trackPoints.length > 0) {
+        const last = trackPoints[trackPoints.length - 1];
+        const distKm = calculateDistanceKm(lat, lng, last.lat, last.lng);
+        if (distKm < 0.005) return; // Unter 5 m wird gefiltert
+      }
+
+      trackPoints.push({
+        lat,
+        lng,
+        ele: altitude !== null ? Number(altitude.toFixed(1)) : null,
+        time: nowIso
+      });
+
+      updateWalkedPathDisplay();
+      saveStateToStorage();
     }
 
     function handlePosition(position) {
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
+      currentAltitude = position.coords.altitude !== null && !isNaN(position.coords.altitude)
+        ? position.coords.altitude
+        : null;
 
-      if (!startCoord) {
-        startCoord = { lat, lng };
-        currentCoord = { lat, lng };
+      currentCoord = { lat, lng };
+
+      if (!map) {
+        if (!startCoord) {
+          startCoord = { lat, lng, ele: currentAltitude };
+        }
         lastRoutedCoord = { lat, lng };
         initMap(lat, lng);
         fetchFootRoute();
       } else {
-        currentCoord = { lat, lng };
         currentMarker.setLatLng([lat, lng]);
-
-        const trackCoords = [
-          [startCoord.lat, startCoord.lng],
-          ...waypoints.map(w => [w.lat, w.lng]),
-          [lat, lng]
-        ];
-        walkedTrackLine.setLatLngs(trackCoords);
 
         const distSinceLastRoute = calculateDistanceKm(lat, lng, lastRoutedCoord.lat, lastRoutedCoord.lng);
         if (distSinceLastRoute >= ROUTING_DISTANCE_THRESHOLD_KM) {
@@ -530,20 +670,121 @@
         }
       }
 
+      recordCurrentPosition(lat, lng, currentAltitude);
       updateCalculations();
     }
 
-    function requestLocation() {
-      if ("geolocation" in navigator) {
-        navigator.geolocation.getCurrentPosition(handlePosition, (err) => {
+    function startGpsWatch() {
+      if ("geolocation" in navigator && geoWatchId === null) {
+        // maximumAge: 30000 nutzt gecachte Positionen anderer Apps zur Akkuschonung
+        geoWatchId = navigator.geolocation.watchPosition(handlePosition, (err) => {
           console.warn(`GPS-Fehler: ${err.message}`);
         }, {
           enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 10000
+          timeout: 20000,
+          maximumAge: 30000
         });
       }
     }
+
+    function stopGpsWatch() {
+      if (geoWatchId !== null) {
+        navigator.geolocation.clearWatch(geoWatchId);
+        geoWatchId = null;
+      }
+    }
+
+    // --- Standby-Erkennung (Page Visibility API) ---
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        // App im Hintergrund / Screen gesperrt: CPU-Timer stoppen
+        if (calcInterval) {
+          clearInterval(calcInterval);
+          calcInterval = null;
+        }
+      } else {
+        // Screen entsperrt: Sofortige Aktualisierung & Timer fortsetzen
+        updateCalculations();
+        if (!calcInterval) {
+          calcInterval = setInterval(updateCalculations, 1000);
+        }
+      }
+    });
+
+    // GPX-Export
+    function generateAndDownloadGPX() {
+      let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+      gpx += `<gpx version="1.1" creator="CityWalkTracker" xmlns="http://www.topografix.com/GPX/1/1">\n`;
+      gpx += `  <metadata>\n    <name>City Walk Tour</name>\n    <time>${new Date().toISOString()}</time>\n  </metadata>\n`;
+
+      if (startCoord) {
+        gpx += `  <wpt lat="${startCoord.lat}" lon="${startCoord.lng}">\n`;
+        if (startCoord.ele !== null && startCoord.ele !== undefined) gpx += `    <ele>${startCoord.ele}</ele>\n`;
+        gpx += `    <name>Startpunkt</name>\n  </wpt>\n`;
+      }
+
+      waypoints.forEach(wp => {
+        gpx += `  <wpt lat="${wp.lat}" lon="${wp.lng}">\n`;
+        if (wp.ele !== null && wp.ele !== undefined) gpx += `    <ele>${wp.ele}</ele>\n`;
+        gpx += `    <name>Stopp #${wp.number}</name>\n    <time>${wp.isoTime || new Date().toISOString()}</time>\n  </wpt>\n`;
+      });
+
+      gpx += `  <trk>\n    <name>Gegangener Weg</name>\n    <trkseg>\n`;
+      trackPoints.forEach(pt => {
+        gpx += `      <trkpt lat="${pt.lat}" lon="${pt.lng}">\n`;
+        if (pt.ele !== null && pt.ele !== undefined) gpx += `        <ele>${pt.ele}</ele>\n`;
+        gpx += `        <time>${pt.time}</time>\n      </trkpt>\n`;
+      });
+      gpx += `    </trkseg>\n  </trk>\n</gpx>`;
+
+      const blob = new Blob([gpx], { type: "application/gpx+xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `city-walk-${dateStr}.gpx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    // Buttons
+    document.getElementById("startWalkBtn").addEventListener("click", () => {
+      isRecording = true;
+      trackPoints = [];
+      waypoints = [];
+      totalElevationGain = 0;
+      lastValidEle = null;
+
+      waypointMarkers.forEach(m => map && map.removeLayer(m));
+      waypointMarkers = [];
+
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        currentAltitude = pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : null;
+
+        startCoord = { lat, lng, ele: currentAltitude };
+        currentCoord = { lat, lng };
+        lastRoutedCoord = { lat, lng };
+        baseIsochroneMinutes = null;
+        baseIsochronePoints = [];
+
+        if (startMarker) startMarker.setLatLng([lat, lng]);
+        if (currentMarker) currentMarker.setLatLng([lat, lng]);
+        if (walkedTrackLine) walkedTrackLine.setLatLngs([]);
+        if (isochronePolygon) isochronePolygon.setLatLngs([]);
+
+        recordCurrentPosition(lat, lng, currentAltitude);
+        saveStateToStorage();
+        fetchFootRoute();
+        updateCalculations();
+
+        document.getElementById("startWalkBtn").textContent = "🔄 Aktiv";
+        document.getElementById("startWalkBtn").className = "btn-primary";
+      });
+    });
 
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
       navigator.geolocation.getCurrentPosition((pos) => {
@@ -552,40 +793,39 @@
       }, () => addWaypoint());
     });
 
-    document.getElementById("setStartBtn").addEventListener("click", () => {
-      if (currentCoord) {
-        waypointMarkers.forEach(m => map.removeLayer(m));
-        waypointMarkers.length = 0;
-        waypoints.length = 0;
-
-        startCoord = { ...currentCoord };
-        lastRoutedCoord = { ...currentCoord };
-        lastCalculatedMinutes = null;
-        startMarker.setLatLng([startCoord.lat, startCoord.lng]);
-        isochronePolygon.setLatLngs([]);
-        walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
-        returnRouteLine.setLatLngs([]);
-
-        document.getElementById("waypointCountDisplay").textContent = "Markierungen: 0";
-
-        fetchFootRoute();
-        updateCalculations();
+    document.getElementById("stopTourBtn").addEventListener("click", () => {
+      if (trackPoints.length === 0 && waypoints.length === 0) {
+        alert("Keine Track- oder Haltepunkte aufgezeichnet.");
+        return;
       }
+      generateAndDownloadGPX();
+      isRecording = false;
+      localStorage.removeItem(STORAGE_KEY);
+      document.getElementById("startWalkBtn").textContent = "▶ Start";
+      document.getElementById("startWalkBtn").className = "btn-green";
     });
 
     targetInput.addEventListener("change", () => {
-      lastCalculatedMinutes = null;
+      baseIsochroneMinutes = null;
+      saveStateToStorage();
       updateCalculations();
     });
 
     reserveInput.addEventListener("input", () => {
-      lastCalculatedMinutes = null;
+      baseIsochroneMinutes = null;
+      saveStateToStorage();
       updateCalculations();
     });
 
-    requestLocation();
-    setInterval(requestLocation, GPS_POLL_INTERVAL_MS);
-    setInterval(updateCalculations, 1000);
+    // Start-Logik
+    const hasRestored = loadStateFromStorage();
+    if (!hasRestored) {
+      const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
+      targetInput.value = defaultTarget.toTimeString().substring(0, 5);
+    }
+
+    startGpsWatch();
+    calcInterval = setInterval(updateCalculations, 1000);
   </script>
 </body>
 </html>
