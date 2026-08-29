@@ -315,11 +315,10 @@
       map = L.map("map", { zoomControl: false }).setView([lat, lng], 16);
 
       // OLED-optimierte dunkle Basiskarte (spart Display-Energie)
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
-        attribution: "© OpenStreetMap © CARTO",
-        subdomains: "abcd"
-      }).addTo(map);
+        attribution: "© OpenStreetMap Mitwirkende"
+        }).addTo(map);
 
       isochronePolygon = L.polygon([], {
         color: '#ef4444',
