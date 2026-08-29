@@ -775,27 +775,41 @@
     }
 
     // Speichern auf Google Drive / System-Share
-    async function saveGPXToDrive() {
+    // GPX-Erstellung & gezieltes Speichern / Drive-Upload
+    async function handleTourExport() {
+      // 1. Abfrage: Soll überhaupt gespeichert werden?
+      const wantToSave = window.confirm("Möchtest du die aufgezeichnete Tour als GPX-Datei speichern?");
+      if (!wantToSave) {
+        return; // Abbruch: Keine Datei wird erzeugt oder heruntergeladen
+      }
+    
       const gpxContent = createGPXString();
       const dateStr = new Date().toISOString().slice(0, 10);
       const filename = `city-walk-${dateStr}.gpx`;
       const file = new File([gpxContent], filename, { type: "application/gpx+xml" });
-
-      // Web Share API: Öffnet auf iOS/Android direkt Google Drive oder die Speicher-Auswahl
+    
+      // 2. Mobiler Weg zu Google Drive (System-Freigabedialog)
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
             files: [file],
             title: filename,
-            text: "GPX Tourdaten für Google Drive"
+            text: "City Walk GPX für Google Drive"
           });
-          return;
+          return; // Nutzer hat Google Drive oder einen Speicherort im Menü gewählt
         } catch (err) {
-          if (err.name === 'AbortError') return; // Nutzer hat Share-Menü abgebrochen
+          if (err.name === 'AbortError') return; // Nutzer hat das Share-Menü abgebrochen
         }
       }
-
-      // Fallback: Direkter Dateidownload
+    
+      // 3. Desktop-Weg: Frage nach Google Drive Upload
+      const openDriveWeb = window.confirm(
+        "Möchtest du Google Drive im Browser öffnen, um die Datei dort hochzuladen?\n\n" +
+        "[OK] = Google Drive öffnen & Datei herunterladen\n" +
+        "[Abbrechen] = Nur lokal speichern"
+      );
+    
+      // Download für den Upload anstoßen
       const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -805,7 +819,12 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    
+      if (openDriveWeb) {
+        window.open("https://drive.google.com/drive/my-drive", "_blank");
+      }
     }
+
 
     // --- Buttons ---
 
@@ -880,22 +899,26 @@
     // STOPP & GPX
     document.getElementById("stopTourBtn").addEventListener("click", async () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
-        alert("Es gibt keine aktive Tour oder aufgezeichnete Daten zum Speichern.");
+        alert("Es gibt keine aktive Tour oder aufgezeichnete Daten.");
         return;
       }
-
-      const confirmStop = window.confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei speichern (z. B. auf Google Drive)?");
-      if (!confirmStop) {
+    
+      const confirmEndTour = window.confirm("Möchtest du die aktuelle Tour wirklich beenden?");
+      if (!confirmEndTour) {
         return;
       }
-
-      await saveGPXToDrive();
+    
+      // Speichern / Drive-Dialog aufrufen
+      await handleTourExport();
+    
+      // Tour sauber zurücksetzen
       isRecording = false;
       localStorage.removeItem(STORAGE_KEY);
-
+    
       document.getElementById("startWalkBtn").textContent = "▶ Start";
       document.getElementById("startWalkBtn").className = "btn-green";
     });
+
 
     targetInput.addEventListener("change", () => {
       baseIsochroneMinutes = null;
