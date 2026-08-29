@@ -188,7 +188,7 @@
       background-color: #000;
     }
 
-    /* Dunkler Look für Standard OSM Kacheln ohne Key */
+    /* Dunkler Look für Standard OSM Kacheln */
     .leaflet-tile-pane {
       filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
     }
@@ -213,8 +213,8 @@
 
   <div id="dashboard">
     <div class="start-addr-row">
-      <span id="startAddrDisplay" class="start-addr-text">Start: Noch nicht gesetzt</span>
-      <button id="reloadStartBtn" class="btn-gray" title="Startadresse & Routing neu laden">🔄 Start laden</button>
+      <span id="startAddrDisplay" class="start-addr-text">Start: GPS wird gesucht...</span>
+      <button id="reloadStartBtn" class="btn-gray" title="Startadresse & Route neu laden">🔄 Start laden</button>
     </div>
 
     <div class="controls-row">
@@ -265,15 +265,14 @@
   <script>
     const WALKING_SPEED_KMH = 3.5;
     const DETOUR_FACTOR = 1.30;
-    const ROUTING_DISTANCE_THRESHOLD_KM = 0.05; // Neuer Rückweg-Pfad ab 50 m
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.05;
     const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
     const STORAGE_KEY = "city_walk_tour_state_v2";
 
-    // Kriterien für Track-Punkte: min. 15 Sekunden ODER min. 10 Meter
-    const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
-    const TRACK_DIST_THRESHOLD_KM = 0.010; // 10 Meter
+    const TRACK_TIME_THRESHOLD_MS = 15 * 1000; // 15 Sekunden
+    const TRACK_DIST_THRESHOLD_KM = 0.010;     // 10 Meter
 
     let map = null;
     let startMarker = null;
@@ -283,7 +282,7 @@
     let isochronePolygon = null;
 
     let startCoord = null;
-    let startAddress = "Noch nicht geladen";
+    let startAddress = "Noch nicht gesetzt";
     let currentCoord = null;
     let lastRoutedCoord = null;
 
@@ -351,7 +350,6 @@
       }
     }
 
-    // Reverse Geocoding via OSM Nominatim (ohne API-Key)
     async function fetchAddress(lat, lng) {
       try {
         startAddrDisplay.textContent = "Start: Suche Adresse...";
@@ -373,7 +371,6 @@
     function initMap(lat, lng) {
       map = L.map("map", { zoomControl: false }).setView([lat, lng], 16);
 
-      // Standard OSM Kacheln (100% frei & schlüssellos)
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "© OpenStreetMap"
@@ -401,13 +398,9 @@
         iconAnchor: [7, 7]
       });
 
-      startMarker = L.marker([startCoord ? startCoord.lat : lat, startCoord ? startCoord.lng : lng], { icon: startIcon })
-        .addTo(map)
-        .bindPopup("<b>Startpunkt</b>");
-
-      currentMarker = L.marker([lat, lng], { icon: currentIcon })
-        .addTo(map)
-        .bindPopup("<b>Aktueller Ort</b>");
+      const startPos = startCoord ? [startCoord.lat, startCoord.lng] : [lat, lng];
+      startMarker = L.marker(startPos, { icon: startIcon }).addTo(map).bindPopup("<b>Startpunkt</b>");
+      currentMarker = L.marker([lat, lng], { icon: currentIcon }).addTo(map).bindPopup("<b>Aktueller Ort</b>");
 
       returnRouteLine = L.polyline([], {
         color: '#3b82f6',
@@ -428,6 +421,7 @@
     }
 
     function renderStoredWaypoints() {
+      if (!map) return;
       waypointMarkers.forEach(m => map.removeLayer(m));
       waypointMarkers = [];
 
@@ -471,7 +465,7 @@
           routedDurationSeconds = (routedDistanceMeters / 1000 / WALKING_SPEED_KMH) * 3600;
 
           const latLngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
-          returnRouteLine.setLatLngs(latLngs);
+          if (returnRouteLine) returnRouteLine.setLatLngs(latLngs);
         }
       } catch (err) {
         // Leise ignorieren
@@ -629,9 +623,11 @@
       bufferDisplay.className = `status-value ${colorClass}`;
     }
 
-    // Standort speichern / Wegpunkt mit Nummer
     function addWaypoint() {
-      if (!currentCoord) return;
+      if (!currentCoord) {
+        alert("Warte auf GPS-Signal...");
+        return;
+      }
 
       const index = waypoints.length + 1;
       const isoTime = new Date().toISOString();
@@ -664,7 +660,6 @@
       saveStateToStorage();
     }
 
-    // Feinere Aufzeichnung: alle 15 Sekunden ODER alle 10 Meter
     function recordCurrentPosition(lat, lng, altitude) {
       if (!isRecording) return;
       const nowMs = Date.now();
@@ -688,7 +683,6 @@
 
       lastTrackPointTime = nowMs;
 
-      // Höhenanstieg berechnen
       if (altitude !== null) {
         if (lastValidEle !== null) {
           const diff = altitude - lastValidEle;
@@ -724,20 +718,18 @@
       currentCoord = { lat, lng };
 
       if (!map) {
-        if (!startCoord) {
-          startCoord = { lat, lng, ele: currentAltitude };
-          fetchAddress(lat, lng);
-        }
-        lastRoutedCoord = { lat, lng };
         initMap(lat, lng);
-        fetchFootRoute();
+        if (!startCoord) {
+          startAddrDisplay.textContent = "Start: Drücke 'Start' zum Loslaufen";
+        }
       } else {
         currentMarker.setLatLng([lat, lng]);
 
-        const distSinceLastRoute = calculateDistanceKm(lat, lng, lastRoutedCoord.lat, lastRoutedCoord.lng);
-        if (distSinceLastRoute >= ROUTING_DISTANCE_THRESHOLD_KM) {
-          lastRoutedCoord = { lat, lng };
-          fetchFootRoute();
+        if (startCoord) {
+          if (!lastRoutedCoord || calculateDistanceKm(lat, lng, lastRoutedCoord.lat, lastRoutedCoord.lng) >= ROUTING_DISTANCE_THRESHOLD_KM) {
+            lastRoutedCoord = { lat, lng };
+            fetchFootRoute();
+          }
         }
       }
 
@@ -757,7 +749,6 @@
       }
     }
 
-    // GPX-Export mit Route, Stopps und Höhenprofil
     function generateAndDownloadGPX() {
       let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
       gpx += `<gpx version="1.1" creator="CityWalkTracker" xmlns="http://www.topografix.com/GPX/1/1">\n`;
@@ -795,31 +786,29 @@
       URL.revokeObjectURL(url);
     }
 
-    // --- Buttons mit Sicherheitsabfragen ---
+    // --- Buttons ---
 
-    // Start-Knopf (mit Bestätigung)
+    // START: Setzt sofort den Startpunkt und aktiviert das Tracking
     document.getElementById("startWalkBtn").addEventListener("click", () => {
       if (isRecording) {
         const proceed = confirm("Es läuft bereits eine Tour. Möchtest du diese wirklich verwerfen und eine NEUE Tour am aktuellen Ort starten?");
         if (!proceed) return;
       }
 
-      navigator.geolocation.getCurrentPosition((pos) => {
+      const applyStart = (lat, lng, ele) => {
         isRecording = true;
         trackPoints = [];
         waypoints = [];
         totalElevationGain = 0;
-        lastValidEle = null;
+        lastValidEle = ele;
         lastTrackPointTime = 0;
 
-        waypointMarkers.forEach(m => map && map.removeLayer(m));
-        waypointMarkers = [];
+        if (map) {
+          waypointMarkers.forEach(m => map.removeLayer(m));
+          waypointMarkers = [];
+        }
 
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        currentAltitude = pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : null;
-
-        startCoord = { lat, lng, ele: currentAltitude };
+        startCoord = { lat, lng, ele };
         currentCoord = { lat, lng };
         lastRoutedCoord = { lat, lng };
         baseIsochroneMinutes = null;
@@ -831,22 +820,32 @@
         if (isochronePolygon) isochronePolygon.setLatLngs([]);
 
         fetchAddress(lat, lng);
-        recordCurrentPosition(lat, lng, currentAltitude);
+        recordCurrentPosition(lat, lng, ele);
         saveStateToStorage();
         fetchFootRoute();
         updateCalculations();
 
         document.getElementById("startWalkBtn").textContent = "🔄 Aktiv";
         document.getElementById("startWalkBtn").className = "btn-primary";
-      }, (err) => {
-        alert("GPS-Position konnte nicht ermittelt werden: " + err.message);
-      }, { enableHighAccuracy: true });
+      };
+
+      if (currentCoord) {
+        // Sofort ausführen, wenn GPS-Position bereits bekannt ist
+        applyStart(currentCoord.lat, currentCoord.lng, currentAltitude);
+      } else {
+        // Einmalige Standortanforderung als Fallback
+        navigator.geolocation.getCurrentPosition((pos) => {
+          applyStart(pos.coords.latitude, pos.coords.longitude, pos.coords.altitude);
+        }, (err) => {
+          alert("GPS-Position konnte nicht ermittelt werden: " + err.message);
+        }, { enableHighAccuracy: true });
+      }
     });
 
-    // Startort neu laden
+    // START LADEN
     document.getElementById("reloadStartBtn").addEventListener("click", () => {
       if (!startCoord) {
-        alert("Kein Startpunkt vorhanden.");
+        alert("Noch kein Startpunkt festgelegt. Drücke zuerst 'Start'.");
         return;
       }
       fetchAddress(startCoord.lat, startCoord.lng);
@@ -854,27 +853,27 @@
       updateCalculations();
     });
 
-    // Stopp / Waypoint merken
+    // STOPP / WEGPUNKT MERKEN
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
-      navigator.geolocation.getCurrentPosition((pos) => {
-        handlePosition(pos);
-        addWaypoint();
-      }, () => addWaypoint(), { enableHighAccuracy: true });
+      addWaypoint();
     });
 
-    // Tour Stoppen & GPX Speichern (mit Bestätigung)
+    // STOPP & GPX (Garantiertes Bestätigungsfenster)
     document.getElementById("stopTourBtn").addEventListener("click", () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
-        alert("Keine Tour aktiv.");
+        alert("Es gibt keine aktive Tour oder aufgezeichnete Daten zum Speichern.");
         return;
       }
 
-      const confirmStop = confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei herunterladen?");
-      if (!confirmStop) return;
+      const confirmStop = window.confirm("Möchtest du die Tour wirklich beenden und die GPX-Datei herunterladen?");
+      if (!confirmStop) {
+        return;
+      }
 
       generateAndDownloadGPX();
       isRecording = false;
       localStorage.removeItem(STORAGE_KEY);
+
       document.getElementById("startWalkBtn").textContent = "▶ Start";
       document.getElementById("startWalkBtn").className = "btn-green";
     });
