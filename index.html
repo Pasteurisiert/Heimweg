@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker (3.5 km/h)</title>
+  <title>City Walk Return Tracker (36 Strahlen Isochrone)</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -37,6 +37,7 @@
       overflow: hidden;
     }
 
+    /* Sticky Header */
     #dashboard {
       position: sticky;
       top: 0;
@@ -212,7 +213,7 @@
     <div class="info-bar">
       <span id="distDisplay">Rückweg: -- km</span>
       <span id="speedDisplay">Tempo: 3.5 km/h</span>
-      <span id="waypointCountDisplay">Markierungen: 0</span>
+      <span id="isochroneStatus">Isochrone: 36 Strahlen</span>
     </div>
   </div>
 
@@ -222,18 +223,19 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    // Auf 3.5 km/h angepasst
     const WALKING_SPEED_KMH = 3.5;
     const DETOUR_FACTOR = 1.30;
     const GPS_POLL_INTERVAL_MS = 60 * 1000;
     const ROUTING_DISTANCE_THRESHOLD_KM = 0.10;
+    const ISOCHRONE_RAYS = 36; // 36 Strahlen (alle 10 Grad)
+    const BATCH_SIZE = 6;       // 6 parallele API-Anfragen pro Block
 
     let map = null;
     let startMarker = null;
     let currentMarker = null;
     let returnRouteLine = null;
     let walkedTrackLine = null;
-    let bufferCircle = null;
+    let isochronePolygon = null;
 
     let startCoord = null;
     let currentCoord = null;
@@ -241,6 +243,8 @@
 
     let routedDistanceMeters = 0;
     let routedDurationSeconds = 0;
+    let isCalculatingIsochrone = false;
+    let lastCalculatedMinutes = null;
 
     const waypoints = [];
     const waypointMarkers = [];
@@ -258,12 +262,12 @@
         attribution: "© OpenStreetMap"
       }).addTo(map);
 
-      bufferCircle = L.circle([lat, lng], {
-        radius: 0,
+      // 36-Strahlen Isochronen-Polygon
+      isochronePolygon = L.polygon([], {
         color: '#ef4444',
         fillColor: '#ef4444',
-        fillOpacity: 0.12,
-        weight: 1.5,
+        fillOpacity: 0.14,
+        weight: 2,
         dashArray: '4, 4'
       }).addTo(map);
 
@@ -322,6 +326,79 @@
       }
     }
 
+    // Berechnung der 36 Strahlen in kontrollierten Batches (zur Vermeidung von OSRM Rate-Limits)
+    async function calculateIsochrone36Rays(maxWalkMinutes) {
+      if (!startCoord || maxWalkMinutes <= 0 || isCalculatingIsochrone) {
+        if (maxWalkMinutes <= 0 && isochronePolygon) isochronePolygon.setLatLngs([]);
+        return;
+      }
+
+      isCalculatingIsochrone = true;
+      document.getElementById("isochroneStatus").textContent = "Isochrone: Rechnet...";
+
+      const maxDistMeters = (maxWalkMinutes / 60) * WALKING_SPEED_KMH * 1000;
+      const boundaryPoints = new Array(ISOCHRONE_RAYS);
+
+      const fetchRay = async (i) => {
+        const angle = (i * 2 * Math.PI) / ISOCHRONE_RAYS;
+        const latOffset = (maxDistMeters / 111320) * Math.cos(angle);
+        const lngOffset = (maxDistMeters / (111320 * Math.cos(startCoord.lat * Math.PI / 180))) * Math.sin(angle);
+        const testLat = startCoord.lat + latOffset;
+        const testLng = startCoord.lng + lngOffset;
+
+        const url = `https://router.project-osrm.org/route/v1/foot/${startCoord.lng},${startCoord.lat};${testLng},${testLat}?overview=full&geometries=geojson`;
+
+        try {
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (data.routes && data.routes.length > 0) {
+            const route = data.routes[0];
+            const routeWalkSeconds = (route.distance / 1000 / WALKING_SPEED_KMH) * 3600;
+            const maxAllowedSeconds = maxWalkMinutes * 60;
+            const coords = route.geometry.coordinates;
+
+            if (coords && coords.length > 0) {
+              if (routeWalkSeconds <= maxAllowedSeconds) {
+                boundaryPoints[i] = [coords[coords.length - 1][1], coords[coords.length - 1][0]];
+              } else {
+                const fraction = maxAllowedSeconds / routeWalkSeconds;
+                const targetIdx = Math.min(coords.length - 1, Math.floor(fraction * coords.length));
+                boundaryPoints[i] = [coords[targetIdx][1], coords[targetIdx][0]];
+              }
+              return;
+            }
+          }
+        } catch (e) {
+          // Fallback bei API-Limit: Geometrischer Offset mit Standard-Wegenetzfaktor
+          const fallbackLat = startCoord.lat + (latOffset / DETOUR_FACTOR);
+          const fallbackLng = startCoord.lng + (lngOffset / DETOUR_FACTOR);
+          boundaryPoints[i] = [fallbackLat, fallbackLng];
+          return;
+        }
+
+        boundaryPoints[i] = [startCoord.lat + (latOffset / DETOUR_FACTOR), startCoord.lng + (lngOffset / DETOUR_FACTOR)];
+      };
+
+      // In Gruppen anfragen, um Serverüberlastung zu verhindern
+      for (let i = 0; i < ISOCHRONE_RAYS; i += BATCH_SIZE) {
+        const batch = [];
+        for (let j = i; j < i + BATCH_SIZE && j < ISOCHRONE_RAYS; j++) {
+          batch.push(fetchRay(j));
+        }
+        await Promise.all(batch);
+      }
+
+      const validPoints = boundaryPoints.filter(p => p !== undefined);
+      if (validPoints.length >= 3 && isochronePolygon) {
+        isochronePolygon.setLatLngs(validPoints);
+        document.getElementById("isochroneStatus").textContent = `Isochrone: 36 Strahlen (${Math.round(maxWalkMinutes)} Min)`;
+      }
+
+      isCalculatingIsochrone = false;
+      lastCalculatedMinutes = Math.round(maxWalkMinutes);
+    }
+
     function calculateDistanceKm(lat1, lon1, lat2, lon2) {
       const R = 6371;
       const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -362,16 +439,10 @@
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
       const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - reserveMinutes;
-      let maxRadiusMeters = 0;
 
-      if (totalAvailableMinutes > 0) {
-        const allowedWalkHours = totalAvailableMinutes / 60;
-        const allowedWalkKm = allowedWalkHours * WALKING_SPEED_KMH;
-        maxRadiusMeters = (allowedWalkKm / DETOUR_FACTOR) * 1000;
-      }
-
-      if (bufferCircle) {
-        bufferCircle.setRadius(Math.max(0, maxRadiusMeters));
+      // 36 Strahlen nur dann neu anfragen, wenn sich die verbleibende Zeit um mehr als 1 Minute geändert hat
+      if (lastCalculatedMinutes === null || Math.abs(Math.round(totalAvailableMinutes) - lastCalculatedMinutes) >= 1) {
+        calculateIsochrone36Rays(Math.max(0, totalAvailableMinutes));
       }
 
       const etaDisplay = document.getElementById("etaDisplay");
@@ -489,8 +560,9 @@
 
         startCoord = { ...currentCoord };
         lastRoutedCoord = { ...currentCoord };
+        lastCalculatedMinutes = null;
         startMarker.setLatLng([startCoord.lat, startCoord.lng]);
-        bufferCircle.setLatLng([startCoord.lat, startCoord.lng]);
+        isochronePolygon.setLatLngs([]);
         walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
         returnRouteLine.setLatLngs([]);
 
@@ -501,8 +573,15 @@
       }
     });
 
-    targetInput.addEventListener("change", updateCalculations);
-    reserveInput.addEventListener("input", updateCalculations);
+    targetInput.addEventListener("change", () => {
+      lastCalculatedMinutes = null;
+      updateCalculations();
+    });
+
+    reserveInput.addEventListener("input", () => {
+      lastCalculatedMinutes = null;
+      updateCalculations();
+    });
 
     requestLocation();
     setInterval(requestLocation, GPS_POLL_INTERVAL_MS);
