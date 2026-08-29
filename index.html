@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>City Walk Return Tracker (Eco)</title>
+  <title>City Walk Return Tracker (Puffer-Radius)</title>
 
+  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
@@ -36,7 +37,6 @@
       overflow: hidden;
     }
 
-    /* Dashboard */
     #dashboard {
       background-color: var(--card-bg);
       padding: 10px 14px;
@@ -99,7 +99,6 @@
     .btn-primary { background-color: var(--accent-blue); }
     .btn-orange { background-color: var(--accent-orange); }
 
-    /* Anzeige-Panel */
     .status-panel {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -141,7 +140,6 @@
       padding-top: 2px;
     }
 
-    /* Karte */
     #map {
       flex: 1;
       width: 100%;
@@ -190,26 +188,28 @@
 
     <div class="info-bar">
       <span id="distDisplay">Rückweg: -- km</span>
-      <span id="walkDurationDisplay">Gehzeit: -- Min</span>
+      <span id="radiusDisplay">30m-Puffer-Radius: -- m</span>
       <span id="waypointCountDisplay">Markierungen: 0</span>
     </div>
   </div>
 
   <div id="map"></div>
 
+  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    // --- Konfiguration & Parameter ---
     const WALKING_SPEED_KMH = 4.5;
-    const GPS_POLL_INTERVAL_MS = 60 * 1000; // 1 Minute Abtastung
-    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle für neue Routenabfrage
+    const DETOUR_FACTOR = 1.30;
+    const GPS_POLL_INTERVAL_MS = 60 * 1000;
+    const ROUTING_DISTANCE_THRESHOLD_KM = 0.10; // 100 m Schwelle
 
     let map = null;
     let startMarker = null;
     let currentMarker = null;
     let returnRouteLine = null;
     let walkedTrackLine = null;
+    let bufferCircle = null;
 
     let startCoord = null;
     let currentCoord = null;
@@ -221,7 +221,6 @@
     const waypoints = [];
     const waypointMarkers = [];
 
-    // Standard-Rückkehrzeit (Jetzt + 2 Stunden)
     const targetInput = document.getElementById("targetTime");
     const defaultTarget = new Date(Date.now() + 2 * 60 * 60 * 1000);
     targetInput.value = defaultTarget.toTimeString().substring(0, 5);
@@ -231,6 +230,16 @@
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "© OpenStreetMap"
+      }).addTo(map);
+
+      // 30-Minuten-Pufferzone um den Startpunkt
+      bufferCircle = L.circle([lat, lng], {
+        radius: 0,
+        color: '#ef4444',
+        fillColor: '#ef4444',
+        fillOpacity: 0.12,
+        weight: 1.5,
+        dashArray: '4, 4'
       }).addTo(map);
 
       const startIcon = L.divIcon({
@@ -266,7 +275,6 @@
       }).addTo(map);
     }
 
-    // OSRM Fußweg-Routing
     async function fetchFootRoute() {
       if (!startCoord || !currentCoord) return;
 
@@ -311,7 +319,7 @@
         walkKm = routedDistanceMeters / 1000;
         walkMs = routedDurationSeconds * 1000;
       } else {
-        walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * 1.3;
+        walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * DETOUR_FACTOR;
         walkMs = (walkKm / WALKING_SPEED_KMH) * 60 * 60 * 1000;
       }
 
@@ -327,15 +335,31 @@
 
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
 
+      // --- Dynamischer Radius für 30 Minuten Puffer ---
+      // Verfügbare Gesamtzeit bis Zielzeit minus 30 Min Puffer
+      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - 30;
+      let maxRadiusMeters = 0;
+
+      if (totalAvailableMinutes > 0) {
+        const allowedWalkHours = totalAvailableMinutes / 60;
+        const allowedWalkKm = allowedWalkHours * WALKING_SPEED_KMH;
+        // Luftlinienradius bereinigt um Stadt-Wegenetzfaktor
+        maxRadiusMeters = (allowedWalkKm / DETOUR_FACTOR) * 1000;
+      }
+
+      if (bufferCircle) {
+        bufferCircle.setRadius(Math.max(0, maxRadiusMeters));
+      }
+
       const etaDisplay = document.getElementById("etaDisplay");
       const bufferDisplay = document.getElementById("bufferDisplay");
       const distDisplay = document.getElementById("distDisplay");
-      const walkDurationDisplay = document.getElementById("walkDurationDisplay");
+      const radiusDisplay = document.getElementById("radiusDisplay");
 
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
       bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
       distDisplay.textContent = `Rückweg: ${walkKm.toFixed(2)} km`;
-      walkDurationDisplay.textContent = `Gehzeit: ~${Math.round(walkMs / 60000)} Min`;
+      radiusDisplay.textContent = maxRadiusMeters > 0 ? `Max. Radius: ${(maxRadiusMeters / 1000).toFixed(2)} km` : `Max. Radius: 0 m`;
 
       let colorClass = "color-green";
       if (bufferMinutes < 30) {
@@ -348,7 +372,6 @@
       bufferDisplay.className = `status-value ${colorClass}`;
     }
 
-    // Wegpunkt speichern
     function addWaypoint() {
       if (!currentCoord) return;
 
@@ -387,7 +410,6 @@
       document.getElementById("waypointCountDisplay").textContent = `Markierungen: ${waypoints.length}`;
     }
 
-    // Minütliche GPS-Positionsverarbeitung
     function handlePosition(position) {
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
@@ -409,7 +431,6 @@
         ];
         walkedTrackLine.setLatLngs(trackCoords);
 
-        // Routing-API nur abfragen bei mindestens 100 m Versatz
         const distSinceLastRoute = calculateDistanceKm(lat, lng, lastRoutedCoord.lat, lastRoutedCoord.lng);
         if (distSinceLastRoute >= ROUTING_DISTANCE_THRESHOLD_KM) {
           lastRoutedCoord = { lat, lng };
@@ -432,9 +453,7 @@
       }
     }
 
-    // Buttons
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
-      // Vor dem Setzen des Punktes sofort einmal aktuelle Position abfragen
       navigator.geolocation.getCurrentPosition((pos) => {
         handlePosition(pos);
         addWaypoint();
@@ -450,6 +469,7 @@
         startCoord = { ...currentCoord };
         lastRoutedCoord = { ...currentCoord };
         startMarker.setLatLng([startCoord.lat, startCoord.lng]);
+        bufferCircle.setLatLng([startCoord.lat, startCoord.lng]);
         walkedTrackLine.setLatLngs([[startCoord.lat, startCoord.lng]]);
         returnRouteLine.setLatLngs([]);
 
@@ -462,11 +482,8 @@
 
     targetInput.addEventListener("change", updateCalculations);
 
-    // Initialer Start & minütlicher Abruf
     requestLocation();
     setInterval(requestLocation, GPS_POLL_INTERVAL_MS);
-
-    // Sekündliches Update für präzisen Uhren- und Puffer-Countdown
     setInterval(updateCalculations, 1000);
   </script>
 </body>
