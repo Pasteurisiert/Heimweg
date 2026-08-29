@@ -541,7 +541,7 @@
       const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
       // Halbe Pufferzeit für Isochrone
-      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - (reserveMinutes / 2);
+      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) / 2 - (reserveMinutes);
       const validMins = Math.max(0, totalAvailableMinutes);
 
       // Neuberechnung über Netzwerk nur alle 5 Min oder initial, ansonsten reine CPU-Skalierung
