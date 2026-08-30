@@ -77,17 +77,10 @@
       flex-wrap: wrap;
     }
 
-    .inputs-container {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
     .input-group {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
     }
 
     label {
@@ -96,20 +89,14 @@
       font-weight: 500;
     }
 
-    input[type="time"],
-    input[type="number"] {
+    input[type="time"] {
       background: #1f2937;
       border: 1px solid #374151;
       color: #fff;
-      padding: 3px 5px;
+      padding: 4px 6px;
       border-radius: 5px;
       font-size: 0.85rem;
       outline: none;
-    }
-
-    input[type="number"] {
-      width: 50px;
-      text-align: center;
     }
 
     .btn-group {
@@ -217,16 +204,9 @@
     </div>
 
     <div class="controls-row">
-      <div class="inputs-container">
-        <div class="input-group">
-          <label for="targetTime">Soll:</label>
-          <input type="time" id="targetTime" />
-        </div>
-        <div class="input-group">
-          <label for="reserveTime">Reserve:</label>
-          <input type="number" id="reserveTime" value="30" min="0" max="180" step="5" />
-          <span style="font-size: 0.7rem; color: var(--text-sub);">Min</span>
-        </div>
+      <div class="input-group">
+        <label for="targetTime">Soll-Rückkehr:</label>
+        <input type="time" id="targetTime" />
       </div>
       <div class="btn-group">
         <button id="startWalkBtn" class="btn-green">▶ Start</button>
@@ -268,7 +248,7 @@
     const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
-    const STORAGE_KEY = "city_walk_tour_state_v2";
+    const STORAGE_KEY = "city_walk_tour_state_v4";
 
     const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
     const TRACK_DIST_THRESHOLD_KM = 0.010;
@@ -305,7 +285,6 @@
     let calcInterval = null;
 
     const targetInput = document.getElementById("targetTime");
-    const reserveInput = document.getElementById("reserveTime");
     const startAddrDisplay = document.getElementById("startAddrDisplay");
 
     function saveStateToStorage() {
@@ -313,7 +292,6 @@
       const state = {
         isRecording,
         targetTime: targetInput.value,
-        reserveTime: reserveInput.value,
         startCoord,
         startAddress,
         totalElevationGain,
@@ -333,7 +311,6 @@
 
         isRecording = true;
         targetInput.value = state.targetTime || "14:00";
-        reserveInput.value = state.reserveTime || "30";
         startCoord = state.startCoord;
         startAddress = state.startAddress || "Gespeicherter Startort";
         totalElevationGain = state.totalElevationGain || 0;
@@ -585,16 +562,17 @@
         targetDate.setDate(targetDate.getDate() + 1);
       }
 
+      // Reiner Zeitpuffer bis zum Soll (in Minuten)
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
-      const reserveMinutes = parseFloat(reserveInput.value) || 0;
 
-      const totalAvailableMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000) - (reserveMinutes / 2);
-      const validMins = Math.max(0, totalAvailableMinutes);
+      // Aktionsradius = exakt die HÄLFTE der verbleibenden Zeit bis zum Soll
+      const remainingTotalMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000);
+      const maxOneWayWalkMinutes = Math.max(0, remainingTotalMinutes / 2);
 
-      if (baseIsochroneMinutes === null || Math.abs(validMins - baseIsochroneMinutes) >= ISOCHRONE_RECALC_INTERVAL_MIN) {
-        calculateIsochrone12Rays(validMins);
+      if (baseIsochroneMinutes === null || Math.abs(maxOneWayWalkMinutes - baseIsochroneMinutes) >= ISOCHRONE_RECALC_INTERVAL_MIN) {
+        calculateIsochrone12Rays(maxOneWayWalkMinutes);
       } else {
-        scaleExistingIsochrone(validMins);
+        scaleExistingIsochrone(maxOneWayWalkMinutes);
       }
 
       const etaDisplay = document.getElementById("etaDisplay");
@@ -609,10 +587,11 @@
       const eleText = currentAltitude !== null ? `${Math.round(currentAltitude)}m` : '--';
       elevationDisplay.textContent = `H: ${eleText} (↑${Math.round(totalElevationGain)}m)`;
 
+      // Feste Schwellen: < 30 Min = Rot, 30 bis 45 Min = Gelb, sonst Grün
       let colorClass = "color-green";
-      if (bufferMinutes < reserveMinutes) {
+      if (bufferMinutes < 30) {
         colorClass = "color-red";
-      } else if (bufferMinutes <= reserveMinutes + 15) {
+      } else if (bufferMinutes <= 45) {
         colorClass = "color-yellow";
       }
 
@@ -774,21 +753,15 @@
       return gpx;
     }
 
-    // Speichern auf Google Drive / System-Share
-    // GPX-Erstellung & gezieltes Speichern / Drive-Upload
     async function handleTourExport() {
-      // 1. Abfrage: Soll überhaupt gespeichert werden?
       const wantToSave = window.confirm("Möchtest du die aufgezeichnete Tour als GPX-Datei speichern?");
-      if (!wantToSave) {
-        return; // Abbruch: Keine Datei wird erzeugt oder heruntergeladen
-      }
-    
+      if (!wantToSave) return;
+
       const gpxContent = createGPXString();
       const dateStr = new Date().toISOString().slice(0, 10);
       const filename = `city-walk-${dateStr}.gpx`;
       const file = new File([gpxContent], filename, { type: "application/gpx+xml" });
-    
-      // 2. Mobiler Weg zu Google Drive (System-Freigabedialog)
+
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
@@ -796,20 +769,18 @@
             title: filename,
             text: "City Walk GPX für Google Drive"
           });
-          return; // Nutzer hat Google Drive oder einen Speicherort im Menü gewählt
+          return;
         } catch (err) {
-          if (err.name === 'AbortError') return; // Nutzer hat das Share-Menü abgebrochen
+          if (err.name === 'AbortError') return;
         }
       }
-    
-      // 3. Desktop-Weg: Frage nach Google Drive Upload
+
       const openDriveWeb = window.confirm(
         "Möchtest du Google Drive im Browser öffnen, um die Datei dort hochzuladen?\n\n" +
         "[OK] = Google Drive öffnen & Datei herunterladen\n" +
         "[Abbrechen] = Nur lokal speichern"
       );
-    
-      // Download für den Upload anstoßen
+
       const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -819,16 +790,14 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    
+
       if (openDriveWeb) {
         window.open("https://drive.google.com/drive/my-drive", "_blank");
       }
     }
 
+    // --- Button Event-Listeners ---
 
-    // --- Buttons ---
-
-    // START
     document.getElementById("startWalkBtn").addEventListener("click", () => {
       if (isRecording) {
         const proceed = confirm("Es läuft bereits eine Tour. Möchtest du diese wirklich verwerfen und eine NEUE Tour am aktuellen Ort starten?");
@@ -880,7 +849,6 @@
       }
     });
 
-    // START LADEN
     document.getElementById("reloadStartBtn").addEventListener("click", () => {
       if (!startCoord) {
         alert("Noch kein Startpunkt festgelegt. Drücke zuerst 'Start'.");
@@ -891,42 +859,28 @@
       updateCalculations();
     });
 
-    // MARKER SETZEN
     document.getElementById("addWaypointBtn").addEventListener("click", () => {
       addWaypoint();
     });
 
-    // STOPP & GPX
     document.getElementById("stopTourBtn").addEventListener("click", async () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
         alert("Es gibt keine aktive Tour oder aufgezeichnete Daten.");
         return;
       }
-    
+
       const confirmEndTour = window.confirm("Möchtest du die aktuelle Tour wirklich beenden?");
-      if (!confirmEndTour) {
-        return;
-      }
-    
-      // Speichern / Drive-Dialog aufrufen
+      if (!confirmEndTour) return;
+
       await handleTourExport();
-    
-      // Tour sauber zurücksetzen
       isRecording = false;
       localStorage.removeItem(STORAGE_KEY);
-    
+
       document.getElementById("startWalkBtn").textContent = "▶ Start";
       document.getElementById("startWalkBtn").className = "btn-green";
     });
 
-
     targetInput.addEventListener("change", () => {
-      baseIsochroneMinutes = null;
-      saveStateToStorage();
-      updateCalculations();
-    });
-
-    reserveInput.addEventListener("input", () => {
       baseIsochroneMinutes = null;
       saveStateToStorage();
       updateCalculations();
