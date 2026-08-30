@@ -171,10 +171,11 @@
     #map {
       flex: 1;
       width: 100%;
-      background-color: #000;
+      background-color: #121212;
     }
 
-    .leaflet-tile-pane {
+    /* Umschaltbare Dunkelfilter-Klasse für OSM Kacheln */
+    .dark-tiles .leaflet-tile-pane {
       filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
     }
 
@@ -199,7 +200,10 @@
   <div id="dashboard">
     <div class="start-addr-row">
       <span id="startAddrDisplay" class="start-addr-text">Start: GPS wird gesucht...</span>
-      <button id="reloadStartBtn" class="btn-gray" title="Startadresse & Route neu laden">🔄 Start laden</button>
+      <div style="display: flex; gap: 4px;">
+        <button id="themeToggleBtn" class="btn-gray" title="Zwischen heller und dunkler Karte wechseln">🌙 Dunkel</button>
+        <button id="reloadStartBtn" class="btn-gray" title="Startadresse & Route neu laden">🔄 Start laden</button>
+      </div>
     </div>
 
     <div class="controls-row">
@@ -235,7 +239,7 @@
     </div>
   </div>
 
-  <div id="map"></div>
+  <div id="map" class="dark-tiles"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -246,7 +250,8 @@
     const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
-    const STORAGE_KEY = "city_walk_tour_state_v5";
+    const STORAGE_KEY = "city_walk_tour_state_v6";
+    const THEME_KEY = "city_walk_map_theme";
 
     const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
     const TRACK_DIST_THRESHOLD_KM = 0.010;
@@ -281,9 +286,29 @@
 
     let geoWatchId = null;
     let calcInterval = null;
+    let isDarkMode = true;
 
     const targetInput = document.getElementById("targetTime");
     const startAddrDisplay = document.getElementById("startAddrDisplay");
+    const themeToggleBtn = document.getElementById("themeToggleBtn");
+    const mapContainer = document.getElementById("map");
+
+    // Theme Verwaltung (Hell / Dunkel)
+    function applyMapTheme(dark) {
+      isDarkMode = dark;
+      if (dark) {
+        mapContainer.classList.add("dark-tiles");
+        themeToggleBtn.textContent = "🌙 Dunkel";
+      } else {
+        mapContainer.classList.remove("dark-tiles");
+        themeToggleBtn.textContent = "☀️ Hell";
+      }
+      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+    }
+
+    themeToggleBtn.addEventListener("click", () => {
+      applyMapTheme(!isDarkMode);
+    });
 
     function saveStateToStorage() {
       if (!isRecording) return;
@@ -747,14 +772,12 @@
       return gpx;
     }
 
-    // Direktes Öffnen des nativen Speichermenüs
     async function openSaveMenu() {
       const gpxContent = createGPXString();
       const dateStr = new Date().toISOString().slice(0, 10);
       const filename = `city-walk-${dateStr}.gpx`;
       const file = new File([gpxContent], filename, { type: "application/gpx+xml" });
 
-      // 1. Mobile & Web Share API (Öffnet Speichern unter iOS/Android/Google Drive)
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
@@ -764,11 +787,10 @@
           });
           return true;
         } catch (err) {
-          if (err.name === 'AbortError') return false; // Abgebrochen
+          if (err.name === 'AbortError') return false;
         }
       }
 
-      // 2. Desktop File System Access API (Öffnet natives "Speichern unter..."-Fenster)
       if (window.showSaveFilePicker) {
         try {
           const handle = await window.showSaveFilePicker({
@@ -787,7 +809,6 @@
         }
       }
 
-      // 3. Fallback für Browser ohne File System Access API
       const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -867,14 +888,12 @@
       addWaypoint();
     });
 
-    // STOPP & SPEICHERMENÜ ÖFFNEN
     document.getElementById("stopTourBtn").addEventListener("click", async () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
         alert("Es gibt keine aktive Tour oder aufgezeichnete Daten.");
         return;
       }
 
-      // Öffnet direkt das native Speichermenü
       const saved = await openSaveMenu();
 
       if (saved) {
@@ -904,6 +923,10 @@
         }
       }
     });
+
+    // Theme-Zustand wiederherstellen
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    applyMapTheme(savedTheme !== "light");
 
     const hasRestored = loadStateFromStorage();
     if (!hasRestored) {
