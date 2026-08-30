@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>City Walk Tracker & GPX Recorder</title>
 
-  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
@@ -211,7 +210,7 @@
       <div class="btn-group">
         <button id="startWalkBtn" class="btn-green">▶ Start</button>
         <button id="addWaypointBtn" class="btn-orange">📍 Marker</button>
-        <button id="stopTourBtn" class="btn-red">⏹ Stop & GPX</button>
+        <button id="stopTourBtn" class="btn-red">⏹ Stop & Speichern</button>
       </div>
     </div>
 
@@ -238,7 +237,6 @@
 
   <div id="map"></div>
 
-  <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
@@ -248,7 +246,7 @@
     const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
-    const STORAGE_KEY = "city_walk_tour_state_v4";
+    const STORAGE_KEY = "city_walk_tour_state_v5";
 
     const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
     const TRACK_DIST_THRESHOLD_KM = 0.010;
@@ -562,10 +560,7 @@
         targetDate.setDate(targetDate.getDate() + 1);
       }
 
-      // Reiner Zeitpuffer bis zum Soll (in Minuten)
       const bufferMinutes = (targetDate.getTime() - expectedReturn.getTime()) / (60 * 1000);
-
-      // Aktionsradius = exakt die HÄLFTE der verbleibenden Zeit bis zum Soll
       const remainingTotalMinutes = (targetDate.getTime() - now.getTime()) / (60 * 1000);
       const maxOneWayWalkMinutes = Math.max(0, remainingTotalMinutes / 2);
 
@@ -587,7 +582,6 @@
       const eleText = currentAltitude !== null ? `${Math.round(currentAltitude)}m` : '--';
       elevationDisplay.textContent = `H: ${eleText} (↑${Math.round(totalElevationGain)}m)`;
 
-      // Feste Schwellen: < 30 Min = Rot, 30 bis 45 Min = Gelb, sonst Grün
       let colorClass = "color-green";
       if (bufferMinutes < 30) {
         colorClass = "color-red";
@@ -753,34 +747,47 @@
       return gpx;
     }
 
-    async function handleTourExport() {
-      const wantToSave = window.confirm("Möchtest du die aufgezeichnete Tour als GPX-Datei speichern?");
-      if (!wantToSave) return;
-
+    // Direktes Öffnen des nativen Speichermenüs
+    async function openSaveMenu() {
       const gpxContent = createGPXString();
       const dateStr = new Date().toISOString().slice(0, 10);
       const filename = `city-walk-${dateStr}.gpx`;
       const file = new File([gpxContent], filename, { type: "application/gpx+xml" });
 
+      // 1. Mobile & Web Share API (Öffnet Speichern unter iOS/Android/Google Drive)
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
           await navigator.share({
             files: [file],
             title: filename,
-            text: "City Walk GPX für Google Drive"
+            text: "City Walk GPX-Tour"
           });
-          return;
+          return true;
         } catch (err) {
-          if (err.name === 'AbortError') return;
+          if (err.name === 'AbortError') return false; // Abgebrochen
         }
       }
 
-      const openDriveWeb = window.confirm(
-        "Möchtest du Google Drive im Browser öffnen, um die Datei dort hochzuladen?\n\n" +
-        "[OK] = Google Drive öffnen & Datei herunterladen\n" +
-        "[Abbrechen] = Nur lokal speichern"
-      );
+      // 2. Desktop File System Access API (Öffnet natives "Speichern unter..."-Fenster)
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: 'GPX Datei',
+              accept: { 'application/gpx+xml': ['.gpx'] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(gpxContent);
+          await writable.close();
+          return true;
+        } catch (err) {
+          if (err.name === 'AbortError') return false;
+        }
+      }
 
+      // 3. Fallback für Browser ohne File System Access API
       const blob = new Blob([gpxContent], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -790,13 +797,10 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-
-      if (openDriveWeb) {
-        window.open("https://drive.google.com/drive/my-drive", "_blank");
-      }
+      return true;
     }
 
-    // --- Button Event-Listeners ---
+    // --- Buttons ---
 
     document.getElementById("startWalkBtn").addEventListener("click", () => {
       if (isRecording) {
@@ -863,21 +867,22 @@
       addWaypoint();
     });
 
+    // STOPP & SPEICHERMENÜ ÖFFNEN
     document.getElementById("stopTourBtn").addEventListener("click", async () => {
       if (!isRecording && trackPoints.length === 0 && waypoints.length === 0) {
         alert("Es gibt keine aktive Tour oder aufgezeichnete Daten.");
         return;
       }
 
-      const confirmEndTour = window.confirm("Möchtest du die aktuelle Tour wirklich beenden?");
-      if (!confirmEndTour) return;
+      // Öffnet direkt das native Speichermenü
+      const saved = await openSaveMenu();
 
-      await handleTourExport();
-      isRecording = false;
-      localStorage.removeItem(STORAGE_KEY);
-
-      document.getElementById("startWalkBtn").textContent = "▶ Start";
-      document.getElementById("startWalkBtn").className = "btn-green";
+      if (saved) {
+        isRecording = false;
+        localStorage.removeItem(STORAGE_KEY);
+        document.getElementById("startWalkBtn").textContent = "▶ Start";
+        document.getElementById("startWalkBtn").className = "btn-green";
+      }
     });
 
     targetInput.addEventListener("change", () => {
