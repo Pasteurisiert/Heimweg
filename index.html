@@ -76,10 +76,17 @@
       flex-wrap: wrap;
     }
 
+    .inputs-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
     .input-group {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
     }
 
     label {
@@ -88,14 +95,29 @@
       font-weight: 500;
     }
 
-    input[type="time"] {
+    input[type="time"],
+    select {
       background: #1f2937;
       border: 1px solid #374151;
       color: #fff;
-      padding: 4px 6px;
+      padding: 3px 5px;
       border-radius: 5px;
       font-size: 0.85rem;
       outline: none;
+    }
+
+    select {
+      cursor: pointer;
+    }
+
+    .avg-speed-badge {
+      font-size: 0.75rem;
+      color: #60a5fa;
+      background: #1e293b;
+      padding: 3px 6px;
+      border-radius: 4px;
+      border: 1px solid #334155;
+      font-weight: 600;
     }
 
     .btn-group {
@@ -174,7 +196,6 @@
       background-color: #121212;
     }
 
-    /* Umschaltbare Dunkelfilter-Klasse für OSM Kacheln */
     .dark-tiles .leaflet-tile-pane {
       filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3);
     }
@@ -207,9 +228,30 @@
     </div>
 
     <div class="controls-row">
-      <div class="input-group">
-        <label for="targetTime">Soll-Rückkehr:</label>
-        <input type="time" id="targetTime" />
+      <div class="inputs-container">
+        <div class="input-group">
+          <label for="targetTime">Soll:</label>
+          <input type="time" id="targetTime" />
+        </div>
+        <div class="input-group">
+          <label for="speedSelect">Tempo:</label>
+          <select id="speedSelect">
+            <option value="3.00">3.00 km/h</option>
+            <option value="3.25">3.25 km/h</option>
+            <option value="3.50" selected>3.50 km/h</option>
+            <option value="3.75">3.75 km/h</option>
+            <option value="4.00">4.00 km/h</option>
+            <option value="4.25">4.25 km/h</option>
+            <option value="4.50">4.50 km/h</option>
+            <option value="4.75">4.75 km/h</option>
+            <option value="5.00">5.00 km/h</option>
+            <option value="5.25">5.25 km/h</option>
+            <option value="5.50">5.50 km/h</option>
+            <option value="5.75">5.75 km/h</option>
+            <option value="6.00">6.00 km/h</option>
+          </select>
+        </div>
+        <span id="avgSpeedDisplay" class="avg-speed-badge" title="Mittlere bisherige Gehgeschwindigkeit">Ø -- km/h</span>
       </div>
       <div class="btn-group">
         <button id="startWalkBtn" class="btn-green">▶ Start</button>
@@ -225,7 +267,7 @@
       </div>
       <div class="status-item">
         <span class="status-label">Zeitpuffer</span>
-        <span id="bufferDisplay" class="status-value color-green">-- Min</span>
+        <span id="bufferDisplay" class="status-value color-green">--:--</span>
       </div>
     </div>
 
@@ -233,7 +275,7 @@
       <span id="distDisplay">Rück: -- km</span>
       <span id="elevationDisplay">H: -- (↑0m)</span>
       <span id="trackPointsDisplay">Track: 0 Pkt</span>
-      <span id="speedDisplay">3.5 km/h</span>
+      <span id="totalWalkedDisplay">Gelaufen: 0.00 km</span>
       <span id="isochroneStatus">Iso: Eco</span>
       <span id="waypointCountDisplay">Marker: 0</span>
     </div>
@@ -244,13 +286,13 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <script>
-    const WALKING_SPEED_KMH = 3.5;
+    let walkingSpeedKmh = 3.50;
     const DETOUR_FACTOR = 1.30;
     const ROUTING_DISTANCE_THRESHOLD_KM = 0.05;
     const ISOCHRONE_RAYS = 12;
     const BATCH_SIZE = 4;
     const ISOCHRONE_RECALC_INTERVAL_MIN = 5;
-    const STORAGE_KEY = "city_walk_tour_state_v6";
+    const STORAGE_KEY = "city_walk_tour_state_v7";
     const THEME_KEY = "city_walk_map_theme";
 
     const TRACK_TIME_THRESHOLD_MS = 15 * 1000;
@@ -279,6 +321,8 @@
     let baseIsochronePoints = [];
 
     let isRecording = false;
+    let tourStartTime = null;
+    let totalWalkedKm = 0;
     let trackPoints = [];
     let waypoints = [];
     let waypointMarkers = [];
@@ -289,11 +333,13 @@
     let isDarkMode = true;
 
     const targetInput = document.getElementById("targetTime");
+    const speedSelect = document.getElementById("speedSelect");
+    const avgSpeedDisplay = document.getElementById("avgSpeedDisplay");
+    const totalWalkedDisplay = document.getElementById("totalWalkedDisplay");
     const startAddrDisplay = document.getElementById("startAddrDisplay");
     const themeToggleBtn = document.getElementById("themeToggleBtn");
     const mapContainer = document.getElementById("map");
 
-    // Theme Verwaltung (Hell / Dunkel)
     function applyMapTheme(dark) {
       isDarkMode = dark;
       if (dark) {
@@ -310,11 +356,24 @@
       applyMapTheme(!isDarkMode);
     });
 
+    function formatBufferHHMM(totalMinutes) {
+      const isNegative = totalMinutes < 0;
+      const absMinutes = Math.abs(Math.round(totalMinutes));
+      const hours = Math.floor(absMinutes / 60);
+      const mins = absMinutes % 60;
+      const padH = String(hours).padStart(2, '0');
+      const padM = String(mins).padStart(2, '0');
+      return (isNegative ? "-" : "") + `${padH}:${padM}`;
+    }
+
     function saveStateToStorage() {
       if (!isRecording) return;
       const state = {
         isRecording,
         targetTime: targetInput.value,
+        speedValue: speedSelect.value,
+        tourStartTime,
+        totalWalkedKm,
         startCoord,
         startAddress,
         totalElevationGain,
@@ -334,6 +393,12 @@
 
         isRecording = true;
         targetInput.value = state.targetTime || "14:00";
+        if (state.speedValue) {
+          speedSelect.value = state.speedValue;
+          walkingSpeedKmh = parseFloat(state.speedValue);
+        }
+        tourStartTime = state.tourStartTime || Date.now();
+        totalWalkedKm = state.totalWalkedKm || 0;
         startCoord = state.startCoord;
         startAddress = state.startAddress || "Gespeicherter Startort";
         totalElevationGain = state.totalElevationGain || 0;
@@ -447,6 +512,7 @@
       const latLngs = trackPoints.map(p => [p.lat, p.lng]);
       walkedTrackLine.setLatLngs(latLngs);
       document.getElementById("trackPointsDisplay").textContent = `Track: ${trackPoints.length} Pkt`;
+      totalWalkedDisplay.textContent = `Gelaufen: ${totalWalkedKm.toFixed(2)} km`;
     }
 
     async function fetchFootRoute() {
@@ -461,7 +527,7 @@
         if (data.routes && data.routes.length > 0) {
           const route = data.routes[0];
           routedDistanceMeters = route.distance;
-          routedDurationSeconds = (routedDistanceMeters / 1000 / WALKING_SPEED_KMH) * 3600;
+          routedDurationSeconds = (routedDistanceMeters / 1000 / walkingSpeedKmh) * 3600;
 
           const latLngs = route.geometry.coordinates.map(coord => [coord[1], coord[0]]);
           if (returnRouteLine) returnRouteLine.setLatLngs(latLngs);
@@ -476,7 +542,7 @@
       }
 
       isCalculatingIsochrone = true;
-      const maxDistMeters = (maxWalkMinutes / 60) * WALKING_SPEED_KMH * 1000;
+      const maxDistMeters = (maxWalkMinutes / 60) * walkingSpeedKmh * 1000;
       const boundaryPoints = new Array(ISOCHRONE_RAYS);
 
       const fetchRay = async (i) => {
@@ -494,7 +560,7 @@
 
           if (data.routes && data.routes.length > 0) {
             const route = data.routes[0];
-            const routeWalkSeconds = (route.distance / 1000 / WALKING_SPEED_KMH) * 3600;
+            const routeWalkSeconds = (route.distance / 1000 / walkingSpeedKmh) * 3600;
             const maxAllowedSeconds = maxWalkMinutes * 60;
             const coords = route.geometry.coordinates;
 
@@ -572,7 +638,7 @@
         walkMs = routedDurationSeconds * 1000;
       } else {
         walkKm = calculateDistanceKm(startCoord.lat, startCoord.lng, currentCoord.lat, currentCoord.lng) * DETOUR_FACTOR;
-        walkMs = (walkKm / WALKING_SPEED_KMH) * 60 * 60 * 1000;
+        walkMs = (walkKm / walkingSpeedKmh) * 60 * 60 * 1000;
       }
 
       const expectedReturn = new Date(now.getTime() + walkMs);
@@ -595,13 +661,23 @@
         scaleExistingIsochrone(maxOneWayWalkMinutes);
       }
 
+      if (isRecording && tourStartTime && totalWalkedKm > 0) {
+        const elapsedHours = (Date.now() - tourStartTime) / (1000 * 60 * 60);
+        if (elapsedHours > 0.005) {
+          const avgKmh = totalWalkedKm / elapsedHours;
+          avgSpeedDisplay.textContent = `Ø ${avgKmh.toFixed(2)} km/h`;
+        }
+      } else {
+        avgSpeedDisplay.textContent = `Ø -- km/h`;
+      }
+
       const etaDisplay = document.getElementById("etaDisplay");
       const bufferDisplay = document.getElementById("bufferDisplay");
       const distDisplay = document.getElementById("distDisplay");
       const elevationDisplay = document.getElementById("elevationDisplay");
 
       etaDisplay.textContent = expectedReturn.toTimeString().substring(0, 8);
-      bufferDisplay.textContent = `${Math.round(bufferMinutes)} Min`;
+      bufferDisplay.textContent = formatBufferHHMM(bufferMinutes);
       distDisplay.textContent = `Rück: ${walkKm.toFixed(2)} km`;
 
       const eleText = currentAltitude !== null ? `${Math.round(currentAltitude)}m` : '--';
@@ -671,6 +747,7 @@
 
         if (distKm >= TRACK_DIST_THRESHOLD_KM || timeDiffMs >= TRACK_TIME_THRESHOLD_MS) {
           shouldRecord = true;
+          totalWalkedKm += distKm;
         }
       }
 
@@ -821,7 +898,17 @@
       return true;
     }
 
-    // --- Buttons ---
+    // --- Buttons & Event-Listeners ---
+
+    speedSelect.addEventListener("change", (e) => {
+      walkingSpeedKmh = parseFloat(e.target.value);
+      baseIsochroneMinutes = null;
+      if (routedDistanceMeters > 0) {
+        routedDurationSeconds = (routedDistanceMeters / 1000 / walkingSpeedKmh) * 3600;
+      }
+      saveStateToStorage();
+      updateCalculations();
+    });
 
     document.getElementById("startWalkBtn").addEventListener("click", () => {
       if (isRecording) {
@@ -831,6 +918,8 @@
 
       const applyStart = (lat, lng, ele) => {
         isRecording = true;
+        tourStartTime = Date.now();
+        totalWalkedKm = 0;
         trackPoints = [];
         waypoints = [];
         totalElevationGain = 0;
@@ -898,6 +987,8 @@
 
       if (saved) {
         isRecording = false;
+        tourStartTime = null;
+        totalWalkedKm = 0;
         localStorage.removeItem(STORAGE_KEY);
         document.getElementById("startWalkBtn").textContent = "▶ Start";
         document.getElementById("startWalkBtn").className = "btn-green";
@@ -924,7 +1015,6 @@
       }
     });
 
-    // Theme-Zustand wiederherstellen
     const savedTheme = localStorage.getItem(THEME_KEY);
     applyMapTheme(savedTheme !== "light");
 
